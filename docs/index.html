@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32-S3 Weather Station</title>
+<meta name="description" content="A self-hosted Wi-Fi weather and air-quality station on the ESP32-S3: DHT22, BMP280, MQ135 and PMS5003 with a live dashboard and JSON API.">
+<meta name="theme-color" content="#0b1120">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230ea5e9'/%3E%3Cpath d='M20 40a10 10 0 0 1 2-19.8A13 13 0 0 1 46 24a8 8 0 0 1-2 16z' fill='white'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f6f8fb;
+  --bg-elev: #ffffff;
+  --bg-sunk: #eef2f7;
+  --text: #0f172a;
+  --text-muted: #526075;
+  --text-faint: #8391a7;
+  --border: #dde4ee;
+  --accent: #0284c7;
+  --accent-strong: #0369a1;
+  --accent-soft: #e0f2fe;
+  --grad-a: #0ea5e9;
+  --grad-b: #6366f1;
+  --c-temp: #0ea5e9;
+  --c-hum: #f97316;
+  --c-press: #8b5cf6;
+  --c-gas: #16a34a;
+  --c-pm25: #db2777;
+  --c-pm10: #0d9488;
+  --c-led: #e11d48;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --wire-3v3: #e11d48;
+  --wire-5v: #ea580c;
+  --shadow: 0 1px 2px rgba(15,23,42,.05), 0 8px 24px -12px rgba(15,23,42,.12);
+  --shadow-lg: 0 24px 60px -24px rgba(15,23,42,.25);
+  --radius: 16px;
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1120;
+    --bg-elev: #111a2e;
+    --bg-sunk: #0e1627;
+    --text: #e8eef8;
+    --text-muted: #9aa8bd;
+    --text-faint: #6b7a92;
+    --border: #1f2b44;
+    --accent: #38bdf8;
+    --accent-strong: #7dd3fc;
+    --accent-soft: rgba(56,189,248,.12);
+    --c-temp: #38bdf8;
+    --c-hum: #fb923c;
+    --c-press: #a78bfa;
+    --c-gas: #4ade80;
+    --c-pm25: #f472b6;
+    --c-pm10: #2dd4bf;
+    --c-led: #fb7185;
+    --danger: #f87171;
+    --danger-soft: rgba(248,113,113,.12);
+    --wire-3v3: #fb7185;
+    --wire-5v: #fb923c;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+    --shadow-lg: 0 24px 60px -24px rgba(0,0,0,.7);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b1120;
+  --bg-elev: #111a2e;
+  --bg-sunk: #0e1627;
+  --text: #e8eef8;
+  --text-muted: #9aa8bd;
+  --text-faint: #6b7a92;
+  --border: #1f2b44;
+  --accent: #38bdf8;
+  --accent-strong: #7dd3fc;
+  --accent-soft: rgba(56,189,248,.12);
+  --c-temp: #38bdf8;
+  --c-hum: #fb923c;
+  --c-press: #a78bfa;
+  --c-gas: #4ade80;
+  --c-pm25: #f472b6;
+  --c-pm10: #2dd4bf;
+  --c-led: #fb7185;
+  --danger: #f87171;
+  --danger-soft: rgba(248,113,113,.12);
+  --wire-3v3: #fb7185;
+  --wire-5v: #fb923c;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.5);
+  --shadow-lg: 0 24px 60px -24px rgba(0,0,0,.7);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, pre { font-family: var(--mono); font-size: .9em; }
+:not(pre) > code { background: var(--bg-sunk); border: 1px solid var(--border); padding: .1em .4em; border-radius: 6px; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+section { padding: 88px 0; }
+.eyebrow { font-size: 13px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 10px; }
+h1, h2, h3 { line-height: 1.15; letter-spacing: -.02em; margin: 0; }
+h2 { font-size: clamp(28px, 4vw, 40px); }
+.lead { color: var(--text-muted); font-size: 18px; max-width: 640px; margin: 14px 0 0; }
+.section-head { margin-bottom: 44px; }
+
+/* nav */
+.nav {
+  position: sticky; top: 0; z-index: 50;
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.nav .wrap { display: flex; align-items: center; gap: 24px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.brand:hover { text-decoration: none; }
+.brand-mark { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); display: grid; place-items: center; }
+.nav-links { display: flex; gap: 22px; margin-left: auto; }
+.nav-links a { color: var(--text-muted); font-size: 15px; font-weight: 500; }
+.nav-links a:hover { color: var(--text); text-decoration: none; }
+.icon-btn {
+  width: 38px; height: 38px; display: grid; place-items: center;
+  border-radius: 10px; border: 1px solid var(--border); background: var(--bg-elev);
+  color: var(--text); cursor: pointer; flex-shrink: 0;
+}
+.icon-btn:hover { border-color: var(--accent); }
+.icon-btn svg { width: 18px; height: 18px; }
+.theme-moon { display: none; }
+:root[data-theme="dark"] .theme-sun { display: none; }
+:root[data-theme="dark"] .theme-moon { display: block; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-sun { display: none; }
+  :root:not([data-theme="light"]) .theme-moon { display: block; }
+}
+
+/* buttons */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 20px; border-radius: 12px; font-weight: 600; font-size: 15px;
+  border: 1px solid var(--border); background: var(--bg-elev); color: var(--text);
+  cursor: pointer; font-family: inherit; transition: transform .15s, border-color .15s, background .15s;
+}
+.btn:hover { text-decoration: none; transform: translateY(-1px); border-color: var(--accent); }
+.btn-primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn-primary:hover { border-color: var(--text); }
+.btn svg { width: 18px; height: 18px; }
+.btn-sm { padding: 8px 14px; font-size: 14px; border-radius: 10px; }
+
+/* hero */
+.hero { position: relative; padding: 96px 0 72px; overflow: hidden; }
+.hero::before {
+  content: ""; position: absolute; inset: -200px -10% auto; height: 640px; z-index: -1;
+  background:
+    radial-gradient(40% 50% at 25% 40%, color-mix(in srgb, var(--grad-a) 22%, transparent), transparent 70%),
+    radial-gradient(35% 45% at 75% 30%, color-mix(in srgb, var(--grad-b) 20%, transparent), transparent 70%);
+}
+.hero-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: center; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 8px;
+  border-radius: 999px; background: var(--bg-elev); border: 1px solid var(--border);
+  font-size: 13px; font-weight: 500; color: var(--text-muted); box-shadow: var(--shadow);
+}
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 0 0 rgba(34,197,94,.6); animation: ping 2s infinite; }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(34,197,94,.55); } 80%,100% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } }
+.hero h1 { font-size: clamp(40px, 6.4vw, 68px); margin: 22px 0 0; letter-spacing: -.035em; }
+.grad-text { background: linear-gradient(120deg, var(--grad-a), var(--grad-b)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.hero .lead { font-size: 20px; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.hero-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; margin-top: 32px; color: var(--text-faint); font-size: 14px; }
+.hero-meta span { display: inline-flex; align-items: center; gap: 7px; }
+.hero-meta svg { width: 16px; height: 16px; }
+
+.hero-card {
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 22px;
+  box-shadow: var(--shadow-lg); padding: 22px; position: relative;
+}
+.hero-card-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+.hero-card-head .t { font-weight: 600; font-size: 15px; }
+.hero-card-head .s { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
+.hero-big { display: flex; align-items: flex-end; gap: 8px; }
+.hero-big .v { font-size: 64px; font-weight: 700; letter-spacing: -.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.hero-big .u { font-size: 22px; color: var(--text-muted); padding-bottom: 8px; }
+.hero-mini { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }
+.hero-mini div { background: var(--bg-sunk); border-radius: 12px; padding: 10px 12px; }
+.hero-mini .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); }
+.hero-mini .n { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.hero-spark { width: 100%; height: 70px; margin-top: 14px; display: block; }
+
+/* feature cards */
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.feature {
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+  transition: transform .2s, border-color .2s;
+}
+.feature:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--c) 50%, var(--border)); }
+.feature .ic {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--c); margin-bottom: 18px;
+}
+.feature .ic svg { width: 22px; height: 22px; }
+.feature h3 { font-size: 19px; }
+.feature .part { font-family: var(--mono); font-size: 12.5px; color: var(--text-faint); margin-top: 4px; }
+.feature p { color: var(--text-muted); margin: 12px 0 16px; font-size: 15px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--bg-sunk); color: var(--text-muted); border: 1px solid var(--border); }
+.tag.pin { color: var(--c); border-color: color-mix(in srgb, var(--c) 35%, var(--border)); background: color-mix(in srgb, var(--c) 9%, transparent); font-family: var(--mono); }
+.led-row { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+.led-row span { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+.led-row i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 8px currentColor; }
+
+/* wiring */
+.wiring-shell { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow); overflow: hidden; }
+.diagram-scroll { overflow-x: auto; padding: 28px 20px 12px; -webkit-overflow-scrolling: touch; }
+.diagram { display: block; width: 100%; min-width: 680px; height: auto; font-family: var(--font); }
+.diagram .box { fill: var(--bg-sunk); stroke: var(--border); stroke-width: 1.5; }
+.diagram .board { fill: var(--bg-sunk); stroke: var(--text-faint); stroke-width: 1.5; }
+.diagram .chip { fill: var(--bg-elev); stroke: var(--border); }
+.diagram .title { fill: var(--text); font-weight: 700; font-size: 16px; }
+.diagram .sub { fill: var(--text-faint); font-size: 12px; }
+.diagram .pinlbl { fill: var(--text-muted); font-size: 12.5px; font-family: var(--mono); font-weight: 600; }
+.diagram .pwr { fill: var(--text-faint); font-size: 11.5px; font-family: var(--mono); }
+.diagram .wirelbl { font-size: 11px; font-family: var(--mono); font-weight: 600; }
+.diagram .wire { fill: none; stroke-width: 3; stroke-linecap: round; }
+.diagram .pin { stroke: var(--bg-elev); stroke-width: 2; }
+.wire-flow { stroke-dasharray: 6 8; animation: flow 1.4s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -28; } }
+.legend { display: flex; flex-wrap: wrap; gap: 10px 24px; padding: 14px 24px 22px; color: var(--text-muted); font-size: 14px; border-bottom: 1px solid var(--border); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { width: 22px; height: 4px; border-radius: 2px; display: inline-block; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 15px; }
+th, td { text-align: left; padding: 12px 24px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); font-weight: 600; background: var(--bg-sunk); }
+tr:last-child td { border-bottom: 0; }
+td .gp { font-family: var(--mono); font-weight: 700; color: var(--accent); }
+td.note { color: var(--text-muted); white-space: normal; min-width: 220px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 8px; vertical-align: 0; }
+.callout {
+  display: flex; gap: 14px; margin-top: 18px; padding: 16px 18px; border-radius: 14px;
+  background: var(--bg-elev); border: 1px solid var(--border); color: var(--text-muted); font-size: 15px;
+}
+.callout svg { width: 20px; height: 20px; flex-shrink: 0; color: var(--c-hum); margin-top: 2px; }
+.callout b { color: var(--text); }
+
+/* demo */
+.demo-frame { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 22px; box-shadow: var(--shadow-lg); overflow: hidden; }
+.browser-bar { display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--bg-sunk); }
+.dots { display: flex; gap: 7px; }
+.dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); display: block; }
+.url { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; color: var(--text-muted); background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.demo-body { display: grid; grid-template-columns: 1fr 320px; }
+.dash { padding: 24px; }
+.dash-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.dash-head h3 { font-size: 20px; }
+.dash-status { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.banner {
+  display: none; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 12px; margin-bottom: 16px;
+  background: var(--danger); color: #fff; font-weight: 600; font-size: 14px; animation: pulse 1.2s infinite;
+}
+.banner.show { display: flex; }
+.banner svg { width: 18px; height: 18px; flex-shrink: 0; }
+@keyframes pulse { 50% { opacity: .72; } }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.card {
+  --c: var(--accent);
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px 10px; background: var(--bg);
+  position: relative; overflow: hidden; transition: background .3s, border-color .3s;
+}
+.card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--c); transition: background .3s; }
+.card.alert { --c: var(--danger); background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.card .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); font-weight: 600; display: flex; justify-content: space-between; }
+.card .lbl em { font-style: normal; color: var(--danger); display: none; }
+.card.alert .lbl em { display: inline; }
+.card .val { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.card .val small { font-size: 14px; font-weight: 500; color: var(--text-muted); margin-left: 4px; }
+.card .sub2 { font-size: 13px; color: var(--text-faint); font-variant-numeric: tabular-nums; height: 18px; }
+.card svg.spark { display: block; width: 100%; height: 36px; margin-top: 6px; }
+.dash-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.json-pane { border-left: 1px solid var(--border); background: var(--bg-sunk); padding: 20px; display: flex; flex-direction: column; min-width: 0; }
+.json-pane .h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.json-pane .h b { font-family: var(--mono); font-size: 13px; }
+.method { font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff; background: #16a34a; padding: 2px 7px; border-radius: 5px; margin-right: 8px; }
+.json-pane pre { margin: 0; flex: 1; font-size: 13px; line-height: 1.7; color: var(--text); white-space: pre; overflow-x: auto; }
+.json-pane .k { color: var(--c-press); }
+.json-pane .n { color: var(--c-gas); }
+.json-pane .flash { animation: flash .6s; border-radius: 4px; }
+@keyframes flash { from { background: var(--accent-soft); } to { background: transparent; } }
+.json-pane .foot { font-size: 12px; color: var(--text-faint); margin-top: 12px; }
+.demo-note { text-align: center; color: var(--text-faint); font-size: 14px; margin-top: 16px; }
+
+/* steps */
+.steps { display: grid; gap: 16px; counter-reset: step; }
+.step {
+  display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 20px; align-items: start;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 24px; box-shadow: var(--shadow);
+}
+.step::before {
+  counter-increment: step; content: counter(step);
+  width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+  font-weight: 700; color: var(--accent); background: var(--accent-soft);
+}
+.step h3 { font-size: 18px; margin-top: 7px; }
+.step p { color: var(--text-muted); margin: 8px 0 0; font-size: 15px; }
+.code {
+  position: relative; margin-top: 14px; background: #0b1120; color: #e2e8f0;
+  border-radius: 12px; border: 1px solid #1f2b44; overflow: hidden;
+}
+.code pre { margin: 0; padding: 16px 18px; overflow-x: auto; font-size: 13.5px; line-height: 1.65; }
+.code .c { color: #64748b; }
+.copy {
+  position: absolute; top: 8px; right: 8px; font-family: var(--font); font-size: 12px; font-weight: 600;
+  background: #1e293b; color: #cbd5e1; border: 1px solid #334155; border-radius: 8px; padding: 5px 10px; cursor: pointer;
+}
+.copy:hover { color: #fff; border-color: #38bdf8; }
+
+/* trouble + cta */
+.trouble { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+details { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; padding: 4px 20px; }
+details[open] { padding-bottom: 14px; }
+summary { cursor: pointer; font-weight: 600; padding: 14px 0; list-style: none; display: flex; justify-content: space-between; gap: 12px; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; color: var(--text-faint); font-weight: 400; font-size: 20px; line-height: 1; }
+details[open] summary::after { content: "–"; }
+details ol, details ul { margin: 0; padding-left: 20px; color: var(--text-muted); font-size: 15px; }
+details li { margin: 6px 0; }
+details b { color: var(--text); }
+
+.cta {
+  margin-top: 56px; border-radius: 24px; padding: 48px; text-align: center; position: relative; overflow: hidden;
+  background: linear-gradient(135deg, var(--grad-a), var(--grad-b)); color: #fff;
+}
+.cta h2 { color: #fff; }
+.cta p { opacity: .9; margin: 12px auto 26px; max-width: 520px; font-size: 17px; }
+.cta .btn { background: #fff; color: #0f172a; border-color: #fff; }
+
+footer { border-top: 1px solid var(--border); padding: 32px 0; color: var(--text-faint); font-size: 14px; }
+footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+/* responsive */
+@media (max-width: 980px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 44px; }
+  .features { grid-template-columns: 1fr 1fr; }
+  .demo-body { grid-template-columns: minmax(0, 1fr); }
+  .json-pane { border-left: 0; border-top: 1px solid var(--border); }
+}
+@media (max-width: 720px) {
+  .wrap { padding: 0 16px; }
+  section { padding: 64px 0; }
+  .hero { padding: 64px 0 48px; }
+  .nav-links { display: none; }
+  .nav .wrap { justify-content: space-between; }
+  .features, .trouble { grid-template-columns: 1fr; }
+  .cards { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card .val { font-size: 21px; }
+  .dash { padding: 16px; }
+  .step { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 20px; }
+  .step h3 { margin-top: 0; }
+  .cta { padding: 36px 20px; }
+  th, td { padding: 10px 14px; }
+  .legend { padding: 12px 16px 18px; }
+}
+@media (max-width: 400px) {
+  .cards { grid-template-columns: 1fr; }
+  .hero-big .v { font-size: 52px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html { scroll-behavior: auto; }
+}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <span class="brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg></span>
+      Weather Station
+    </a>
+    <div class="nav-links">
+      <a href="#sensors">Sensors</a>
+      <a href="#wiring">Wiring</a>
+      <a href="#demo">Live demo</a>
+      <a href="#start">Get started</a>
+    </div>
+    <button class="icon-btn" id="themeBtn" aria-label="Toggle dark mode" title="Toggle theme">
+      <svg class="theme-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg class="theme-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+    </button>
+    <a class="icon-btn" href="https://github.com/akshajtripathi24-ui/esp32-s3-weather-station" aria-label="View on GitHub" title="View on GitHub">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+    </a>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="pill"><span class="live-dot"></span>Open-source · ESP32-S3 · Arduino</span>
+      <h1>ESP32-S3 <span class="grad-text">Weather Station</span></h1>
+      <p class="lead">Temperature, humidity, pressure, gas and fine dust readings on a live dashboard served by the board itself.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/akshajtripathi24-ui/esp32-s3-weather-station">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+          View on GitHub
+        </a>
+        <a class="btn" href="#demo">See the live demo
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+      </div>
+      <div class="hero-meta">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14 0M8.5 16a6 6 0 0 1 7 0M12 20h.01M2 8.82a15 15 0 0 1 20 0"/></svg>No cloud, local Wi-Fi only</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>Refreshes every 2 s</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg>JSON API at /data</span>
+      </div>
+    </div>
+
+    <div class="hero-card" aria-hidden="true">
+      <div class="hero-card-head">
+        <span class="t">Indoor · Living room</span>
+        <span class="s" id="heroClock">--:--:--</span>
+      </div>
+      <div class="hero-big"><span class="v" id="heroTemp">27.4</span><span class="u">°C</span></div>
+      <svg class="hero-spark" id="heroSpark" viewBox="0 0 300 70" preserveAspectRatio="none"></svg>
+      <div class="hero-mini">
+        <div><div class="k">Humidity</div><div class="n" id="heroHum">58%</div></div>
+        <div><div class="k">PM2.5</div><div class="n" id="heroPm">18</div></div>
+        <div><div class="k">Pressure</div><div class="n" id="heroPress">1009</div></div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section id="sensors">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Hardware</p>
+      <h2>Four sensors, one board</h2>
+      <p class="lead">Each sensor covers a different part of the air around you, from comfort to pollution.</p>
+    </div>
+    <div class="features">
+      <article class="feature" style="--c: var(--c-temp)">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg></div>
+        <h3>Temperature &amp; humidity</h3>
+        <div class="part">DHT22 / AM2302</div>
+        <p>Ambient temperature in °C and °F plus relative humidity. Alerts below 0 °C or above 45 °C, and below 20 % or above 85 % RH.</p>
+        <div class="tags"><span class="tag pin">GPIO4</span><span class="tag">°C / °F</span><span class="tag">% RH</span></div>
+      </article>
+      <article class="feature" style="--c: var(--c-press)">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg></div>
+        <h3>Barometric pressure</h3>
+        <div class="part">Bosch BMP280 · I²C</div>
+        <p>Air pressure in hPa for tracking weather fronts. The firmware finds the sensor at either I²C address, 0x76 or 0x77.</p>
+        <div class="tags"><span class="tag pin">SDA GPIO8</span><span class="tag pin">SCL GPIO9</span><span class="tag">hPa</span></div>
+      </article>
+      <article class="feature" style="--c: var(--c-gas)">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg></div>
+        <h3>Air quality</h3>
+        <div class="part">MQ135 gas sensor · analog</div>
+        <p>Detects NH₃, NOx, benzene, smoke and CO₂ as an Rs/Ro ratio, averaged over 32 samples and smoothed. Lower values mean more gas.</p>
+        <div class="tags"><span class="tag pin">GPIO1</span><span class="tag">Rs/Ro</span><span class="tag">ADC 11 dB</span></div>
+      </article>
+      <article class="feature" style="--c: var(--c-pm25)">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="7" r="1.6"/><circle cx="14" cy="5" r="1"/><circle cx="18" cy="11" r="2"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="18" r="1.5"/><circle cx="5" cy="19" r="1"/></svg></div>
+        <h3>Particulate matter</h3>
+        <div class="part">Plantower PMS5003 · UART</div>
+        <p>Laser-scattering dust sensor for PM2.5 and PM10 in µg/m³. Each 32-byte frame is checksum-verified before it's used.</p>
+        <div class="tags"><span class="tag pin">RX GPIO15</span><span class="tag pin">TX GPIO7</span><span class="tag">9600 baud</span></div>
+      </article>
+      <article class="feature" style="--c: var(--c-led)">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2Z"/></svg></div>
+        <h3>Status LED</h3>
+        <div class="part">Onboard WS2812 NeoPixel</div>
+        <p>Shows the board's state at a glance, with no Serial Monitor needed.</p>
+        <div class="led-row">
+          <span><i style="color:#ef4444;background:#ef4444"></i>Booting</span>
+          <span><i style="color:#a855f7;background:#a855f7"></i>Wi-Fi failed</span>
+          <span><i style="color:#22c55e;background:#22c55e"></i>Online</span>
+          <span><i style="color:#3b82f6;background:#3b82f6"></i>Serving</span>
+        </div>
+      </article>
+      <article class="feature" style="--c: var(--accent)">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M7 9l3 3-3 3M13 15h4"/></svg></div>
+        <h3>Web dashboard + API</h3>
+        <div class="part">ESP32 WebServer · port 80</div>
+        <p>A responsive dashboard at <code>/</code> with alert banners and a beep, plus a JSON endpoint at <code>/data</code> for your own tools.</p>
+        <div class="tags"><span class="tag pin">GET /</span><span class="tag pin">GET /data</span><span class="tag">2 s polling</span></div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="wiring" style="padding-top: 24px">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Wiring</p>
+      <h2>Wire it up</h2>
+      <p class="lead">These pin numbers come from the firmware. Connect all grounds together.</p>
+    </div>
+
+    <div class="wiring-shell">
+      <div class="diagram-scroll">
+        <svg class="diagram" viewBox="0 0 900 470" role="img" aria-labelledby="wd-title wd-desc">
+          <title id="wd-title">Wiring diagram</title>
+          <desc id="wd-desc">DHT22 data to GPIO4; BMP280 SDA to GPIO8 and SCL to GPIO9; PMS5003 TX to GPIO15 and RX to GPIO7; MQ135 AO to GPIO1; NeoPixel on GPIO48.</desc>
+
+          <!-- wires (drawn first so pins sit on top) -->
+          <g class="wire">
+            <path d="M240 112 H350" stroke="var(--c-temp)"/>
+            <path d="M240 248 H350" stroke="var(--c-press)"/>
+            <path d="M240 288 H350" stroke="var(--c-press)" stroke-opacity=".6"/>
+            <path d="M660 112 C 610 112, 600 148, 550 148" stroke="var(--c-pm25)"/>
+            <path d="M660 152 C 610 152, 600 112, 550 112" stroke="var(--c-pm25)" stroke-opacity=".6"/>
+            <path d="M660 328 H550" stroke="var(--c-gas)"/>
+          </g>
+          <g class="wire wire-flow" stroke-width="3">
+            <path d="M240 112 H350" stroke="var(--bg-elev)" stroke-opacity=".55"/>
+            <path d="M240 248 H350" stroke="var(--bg-elev)" stroke-opacity=".55"/>
+            <path d="M660 112 C 610 112, 600 148, 550 148" stroke="var(--bg-elev)" stroke-opacity=".55"/>
+            <path d="M660 328 H550" stroke="var(--bg-elev)" stroke-opacity=".55"/>
+          </g>
+
+          <!-- ESP32-S3 board -->
+          <rect class="board" x="350" y="30" width="200" height="410" rx="18"/>
+          <rect class="chip" x="395" y="175" width="110" height="110" rx="10"/>
+          <text class="title" x="450" y="224" text-anchor="middle">ESP32-S3</text>
+          <text class="sub" x="450" y="244" text-anchor="middle">DevKitC-1</text>
+          <rect x="420" y="410" width="60" height="16" rx="4" fill="var(--text-faint)" opacity=".35"/>
+          <text class="sub" x="450" y="400" text-anchor="middle">USB-C</text>
+
+          <!-- board pins: left -->
+          <circle class="pin" cx="350" cy="112" r="7" fill="var(--c-temp)"/>
+          <text class="pinlbl" x="364" y="116">GPIO4</text>
+          <circle class="pin" cx="350" cy="248" r="7" fill="var(--c-press)"/>
+          <text class="pinlbl" x="364" y="252">GPIO8</text>
+          <circle class="pin" cx="350" cy="288" r="7" fill="var(--c-press)"/>
+          <text class="pinlbl" x="364" y="292">GPIO9</text>
+          <!-- board pins: right -->
+          <circle class="pin" cx="550" cy="112" r="7" fill="var(--c-pm25)"/>
+          <text class="pinlbl" x="536" y="116" text-anchor="end">GPIO7</text>
+          <circle class="pin" cx="550" cy="148" r="7" fill="var(--c-pm25)"/>
+          <text class="pinlbl" x="536" y="152" text-anchor="end">GPIO15</text>
+          <circle class="pin" cx="550" cy="328" r="7" fill="var(--c-gas)"/>
+          <text class="pinlbl" x="536" y="332" text-anchor="end">GPIO1</text>
+          <!-- onboard neopixel -->
+          <circle cx="450" cy="345" r="13" fill="var(--c-led)" opacity=".18"/>
+          <circle cx="450" cy="345" r="7" fill="var(--c-led)"/>
+          <text class="pinlbl" x="450" y="377" text-anchor="middle">RGB · GPIO48</text>
+
+          <!-- DHT22 -->
+          <rect class="box" x="40" y="60" width="200" height="104" rx="14"/>
+          <text class="title" x="60" y="90">DHT22</text>
+          <text class="sub" x="60" y="108">Temp + humidity</text>
+          <text class="pwr" x="60" y="146">VCC→3V3 · GND</text>
+          <circle class="pin" cx="240" cy="112" r="7" fill="var(--c-temp)"/>
+          <text class="wirelbl" x="292" y="104" text-anchor="middle" fill="var(--c-temp)">DATA</text>
+
+          <!-- BMP280 -->
+          <rect class="box" x="40" y="206" width="200" height="124" rx="14"/>
+          <text class="title" x="60" y="236">BMP280</text>
+          <text class="sub" x="60" y="254">Pressure · I²C</text>
+          <text class="pwr" x="60" y="312">VCC→3V3 · GND</text>
+          <circle class="pin" cx="240" cy="248" r="7" fill="var(--c-press)"/>
+          <circle class="pin" cx="240" cy="288" r="7" fill="var(--c-press)"/>
+          <text class="wirelbl" x="292" y="240" text-anchor="middle" fill="var(--c-press)">SDA</text>
+          <text class="wirelbl" x="292" y="280" text-anchor="middle" fill="var(--c-press)">SCL</text>
+
+          <!-- PMS5003 -->
+          <rect class="box" x="660" y="60" width="200" height="140" rx="14"/>
+          <text class="title" x="840" y="90" text-anchor="end">PMS5003</text>
+          <text class="sub" x="840" y="108" text-anchor="end">PM2.5 / PM10 · UART</text>
+          <text class="pwr" x="840" y="168" text-anchor="end">VCC→5V · GND</text>
+          <text class="pwr" x="840" y="186" text-anchor="end">SET floating / HIGH</text>
+          <circle class="pin" cx="660" cy="112" r="7" fill="var(--c-pm25)"/>
+          <circle class="pin" cx="660" cy="152" r="7" fill="var(--c-pm25)"/>
+          <text class="pinlbl" x="674" y="116">TX</text>
+          <text class="pinlbl" x="674" y="156">RX</text>
+          <text class="wirelbl" x="605" y="92" text-anchor="middle" fill="var(--c-pm25)">crossover</text>
+
+          <!-- MQ135 -->
+          <rect class="box" x="660" y="276" width="200" height="104" rx="14"/>
+          <text class="title" x="840" y="306" text-anchor="end">MQ135</text>
+          <text class="sub" x="840" y="324" text-anchor="end">Air quality · analog</text>
+          <text class="pwr" x="840" y="362" text-anchor="end">VCC→5V · GND</text>
+          <circle class="pin" cx="660" cy="328" r="7" fill="var(--c-gas)"/>
+          <text class="pinlbl" x="674" y="332">AO</text>
+        </svg>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--c-temp)"></i>1-wire data</span>
+        <span><i style="background:var(--c-press)"></i>I²C</span>
+        <span><i style="background:var(--c-pm25)"></i>UART (TX↔RX crossed)</span>
+        <span><i style="background:var(--c-gas)"></i>Analog</span>
+        <span><i style="background:var(--wire-3v3)"></i>3V3 sensors: DHT22, BMP280</span>
+        <span><i style="background:var(--wire-5v)"></i>5V sensors: MQ135, PMS5003</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Sensor</th><th>Sensor pin</th><th>ESP32-S3</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td><span class="sw" style="background:var(--c-temp)"></span>DHT22</td><td>DATA</td><td><span class="gp">GPIO4</span></td><td class="note">VCC 3V3 · <code>#define DHTPIN 4</code></td></tr>
+            <tr><td><span class="sw" style="background:var(--c-press)"></span>BMP280</td><td>SDA</td><td><span class="gp">GPIO8</span></td><td class="note">VCC 3V3 only · <code>Wire.begin(8, 9)</code></td></tr>
+            <tr><td><span class="sw" style="background:var(--c-press)"></span>BMP280</td><td>SCL</td><td><span class="gp">GPIO9</span></td><td class="note">Address 0x76 or 0x77, detected automatically</td></tr>
+            <tr><td><span class="sw" style="background:var(--c-gas)"></span>MQ135</td><td>AO</td><td><span class="gp">GPIO1</span></td><td class="note">VCC 5V · ADC1_CH0, 11 dB attenuation</td></tr>
+            <tr><td><span class="sw" style="background:var(--c-pm25)"></span>PMS5003</td><td>TX (pin 5)</td><td><span class="gp">GPIO15</span> (RX)</td><td class="note">VCC 5V · Serial1 at 9600 8N1</td></tr>
+            <tr><td><span class="sw" style="background:var(--c-pm25)"></span>PMS5003</td><td>RX (pin 4)</td><td><span class="gp">GPIO7</span> (TX)</td><td class="note">Leave SET (pin 3) floating or HIGH, because LOW puts the sensor to sleep</td></tr>
+            <tr><td><span class="sw" style="background:var(--c-led)"></span>NeoPixel</td><td>DIN</td><td><span class="gp">GPIO48</span></td><td class="note">Onboard, no wiring needed</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="callout">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01"/></svg>
+      <div><b>Protect GPIO1.</b> The MQ135 module runs at 5 V, so its AO pin can go above 3.3 V. Add a 10 kΩ + 20 kΩ divider and set <code>DIVIDER = 1.5</code> in the sketch.</div>
+    </div>
+  </div>
+</section>
+
+<section id="demo" style="padding-top: 24px">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Live demo</p>
+      <h2>The dashboard, simulated</h2>
+      <p class="lead">This is what you see at the board's IP address. The values below are sample data that updates every 2 seconds, so no device is needed.</p>
+    </div>
+
+    <div class="demo-frame">
+      <div class="browser-bar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <div class="url">http://192.168.1.42/</div>
+      </div>
+      <div class="demo-body">
+        <div class="dash">
+          <div class="dash-head">
+            <h3>Live IoT Weather Station</h3>
+            <span class="dash-status"><span class="live-dot"></span><span id="ago">Updated just now</span></span>
+          </div>
+          <div class="banner" id="banner" role="status">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01"/></svg>
+            <span id="bannerText"></span>
+          </div>
+          <div class="cards" id="cards"></div>
+          <div class="dash-actions">
+            <button class="btn btn-sm" id="spikeBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              Simulate a dust spike
+            </button>
+            <button class="btn btn-sm" id="pauseBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>
+              <span>Pause</span>
+            </button>
+          </div>
+        </div>
+        <aside class="json-pane">
+          <div class="h"><b><span class="method">GET</span>/data</b><span class="dash-status">200 OK</span></div>
+          <pre id="json"></pre>
+          <div class="foot">application/json · polled every 2000 ms</div>
+        </aside>
+      </div>
+    </div>
+    <p class="demo-note">Alert thresholds match the firmware: PM2.5 &gt; 65, PM10 &gt; 150, Rs/Ro &lt; 0.60, temperature outside 0–45 °C, humidity outside 20–85 %.</p>
+  </div>
+</section>
+
+<section id="start" style="padding-top: 24px">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Get started</p>
+      <h2>Up and running in five steps</h2>
+      <p class="lead">You need the Arduino IDE 2.x (or <code>arduino-cli</code>), an ESP32-S3 board and a USB-C data cable.</p>
+    </div>
+    <div class="steps">
+      <div class="step"><div>
+        <h3>Clone the repository</h3>
+        <div class="code"><button class="copy">Copy</button><pre>git clone https://github.com/akshajtripathi24-ui/esp32-s3-weather-station.git
+cd esp32-s3-weather-station/firmware/weather_station</pre></div>
+      </div></div>
+      <div class="step"><div>
+        <h3>Install the board package and libraries</h3>
+        <p>Add the Espressif boards URL in Preferences and install <b>esp32 by Espressif Systems</b>. Then install these libraries:</p>
+        <div class="code"><button class="copy">Copy</button><pre>arduino-cli core install esp32:esp32
+arduino-cli lib install "DHT sensor library" "Adafruit Unified Sensor" \
+  "Adafruit BMP280 Library" "Adafruit BusIO" "Adafruit NeoPixel"</pre></div>
+      </div></div>
+      <div class="step"><div>
+        <h3>Add your Wi-Fi credentials</h3>
+        <p>Copy <code>secrets.example.h</code> to <code>secrets.h</code> and fill it in. The file is gitignored, so it stays on your machine. Use a 2.4 GHz network.</p>
+        <div class="code"><button class="copy">Copy</button><pre>#define WIFI_SSID     "your-wifi-name"
+#define WIFI_PASSWORD "your-wifi-password"</pre></div>
+      </div></div>
+      <div class="step"><div>
+        <h3>Flash the ESP32-S3</h3>
+        <p>Select <b>ESP32S3 Dev Module</b>, set <b>USB CDC On Boot → Enabled</b>, pick your port and click Upload.</p>
+        <div class="code"><button class="copy">Copy</button><pre>arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc .
+arduino-cli upload  --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc -p COM5 .</pre></div>
+      </div></div>
+      <div class="step"><div>
+        <h3>Open the dashboard</h3>
+        <p>Open the Serial Monitor at 115200 baud, press RST and copy the IP address it prints. Open it in any browser on the same network.</p>
+        <div class="code"><button class="copy">Copy</button><pre><span class="c"># Serial Monitor output</span>
+Connected! IP Address: http://192.168.1.42
+
+<span class="c"># Raw readings</span>
+curl http://192.168.1.42/data</pre></div>
+      </div></div>
+    </div>
+
+    <div class="trouble">
+      <details open>
+        <summary>PM2.5 and PM10 always read 0</summary>
+        <ol>
+          <li><b>Crossover:</b> connect the sensor's TX to GPIO15 (RX) and its RX to GPIO7 (TX), not TX to TX.</li>
+          <li><b>5 V power:</b> the PMS5003 fan needs 5 V, so check that you can hear it spin.</li>
+          <li><b>9600 baud</b> 8N1. This matches <code>Serial1.begin(9600, …)</code>.</li>
+          <li><b>SET pin:</b> if SET is pulled LOW, the sensor sleeps. Leave it floating or HIGH.</li>
+        </ol>
+      </details>
+      <details>
+        <summary>Pressure stuck at 728 hPa</summary>
+        <ul>
+          <li>728 is the firmware's fallback value, which means the BMP280 isn't responding.</li>
+          <li>Check SDA → GPIO8, SCL → GPIO9 and 3V3 power.</li>
+          <li>A board with chip ID 0x60 is a BME280. Use the BME280 library for it.</li>
+        </ul>
+      </details>
+    </div>
+
+    <div class="cta">
+      <h2>Build your own</h2>
+      <p>Firmware, wiring, parts list and the full troubleshooting guide are all in the repository. MIT licensed.</p>
+      <a class="btn" href="https://github.com/akshajtripathi24-ui/esp32-s3-weather-station">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        akshajtripathi24-ui/esp32-s3-weather-station
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>ESP32-S3 Weather Station · MIT License</span>
+    <span>Built by <a href="https://github.com/akshajtripathi24-ui">@akshajtripathi24-ui</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  // ---------- theme ----------
+  var root = document.documentElement;
+  try { var saved = localStorage.getItem('theme'); if (saved) root.setAttribute('data-theme', saved); } catch (e) {}
+  function isDark() {
+    var t = root.getAttribute('data-theme');
+    return t ? t === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  document.getElementById('themeBtn').addEventListener('click', function () {
+    var next = isDark() ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    try { localStorage.setItem('theme', next); } catch (e) {}
+  });
+
+  // ---------- copy buttons ----------
+  document.querySelectorAll('.copy').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var text = b.nextElementSibling.innerText;
+      var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1400); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+    });
+  });
+
+  // ---------- simulated sensor data ----------
+  var HIST = 30;
+  var state = { tempC: 27.4, humidity: 58.2, pressure: 1008.6, ratio: 1.12, pm25: 18, pm10: 27 };
+  var spike = 0;
+  function drift(v, target, step, min, max) {
+    v += (target - v) * 0.08 + (Math.random() - 0.5) * step;
+    return Math.min(max, Math.max(min, v));
+  }
+  function tick() {
+    state.tempC = drift(state.tempC, 27.2, 0.35, -10, 60);
+    state.humidity = drift(state.humidity, 57, 1.2, 0, 100);
+    state.pressure = drift(state.pressure, 1008.8, 0.25, 900, 1100);
+    if (spike > 0) {
+      spike--;
+      state.pm25 = drift(state.pm25, 96, 6, 0, 500);
+      state.pm10 = drift(state.pm10, 172, 9, 0, 500);
+      state.ratio = drift(state.ratio, 0.48, 0.03, 0.1, 3);
+      state.pm25 += (96 - state.pm25) * 0.35;
+      state.pm10 += (172 - state.pm10) * 0.35;
+    } else {
+      state.pm25 = drift(state.pm25, 17, 2.2, 0, 500);
+      state.pm10 = drift(state.pm10, 26, 3, 0, 500);
+      state.ratio = drift(state.ratio, 1.1, 0.03, 0.1, 3);
+    }
+    // PMS5003 reports whole µg/m³ values
+    state.pm25 = Math.round(state.pm25);
+    state.pm10 = Math.round(state.pm10);
+  }
+
+  var cards = [
+    { id: 'temp',  label: 'Temperature',         color: '--c-temp',  fmt: function (d) { return d.tempC.toFixed(1) + '<small>°C</small>'; }, sub: function (d) { return (d.tempC * 9 / 5 + 32).toFixed(1) + ' °F'; }, key: 'tempC', alert: function (d) { return d.tempC > 45 || d.tempC < 0; } },
+    { id: 'hum',   label: 'Humidity',            color: '--c-hum',   fmt: function (d) { return d.humidity.toFixed(1) + '<small>%</small>'; }, sub: function () { return 'relative'; }, key: 'humidity', alert: function (d) { return d.humidity > 85 || d.humidity < 20; } },
+    { id: 'press', label: 'Pressure',            color: '--c-press', fmt: function (d) { return d.pressure.toFixed(1) + '<small>hPa</small>'; }, sub: function () { return 'BMP280'; }, key: 'pressure', alert: function (d) { return d.pressure < 550 || d.pressure > 1400; } },
+    { id: 'gas',   label: 'Air quality (Rs/Ro)', color: '--c-gas',   fmt: function (d) { return d.ratio.toFixed(2) + '<small>ratio</small>'; }, sub: function (d) { return d.ratio >= 0.9 ? 'clean' : d.ratio >= 0.6 ? 'moderate' : 'poor'; }, key: 'ratio', alert: function (d) { return d.ratio < 0.60; } },
+    { id: 'pm25',  label: 'PM2.5 dust',          color: '--c-pm25',  fmt: function (d) { return d.pm25.toFixed(1) + '<small>µg/m³</small>'; }, sub: function () { return 'fine particles'; }, key: 'pm25', alert: function (d) { return d.pm25 > 65; } },
+    { id: 'pm10',  label: 'PM10 dust',           color: '--c-pm10',  fmt: function (d) { return d.pm10.toFixed(1) + '<small>µg/m³</small>'; }, sub: function () { return 'coarse particles'; }, key: 'pm10', alert: function (d) { return d.pm10 > 150; } }
+  ];
+  var alertNames = { temp: 'Temperature', hum: 'Humidity', press: 'Pressure', gas: 'Air Quality', pm25: 'PM2.5', pm10: 'PM10' };
+
+  // seed history so sparklines aren't empty on load
+  var hist = {};
+  cards.forEach(function (c) { hist[c.key] = []; });
+  for (var i = 0; i < HIST; i++) { tick(); cards.forEach(function (c) { hist[c.key].push(state[c.key]); }); }
+
+  var cardsEl = document.getElementById('cards');
+  cards.forEach(function (c) {
+    var el = document.createElement('div');
+    el.className = 'card';
+    el.id = c.id + '-card';
+    el.style.setProperty('--c', 'var(' + c.color + ')');
+    el.innerHTML = '<div class="lbl">' + c.label + '<em>alert</em></div><div class="val"></div><div class="sub2"></div>' +
+      '<svg class="spark" viewBox="0 0 100 36" preserveAspectRatio="none"><path class="area" fill="var(' + c.color + ')" fill-opacity=".12"/><path class="line" fill="none" stroke="var(' + c.color + ')" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>';
+    cardsEl.appendChild(el);
+    c.el = el;
+  });
+
+  function sparkPath(arr, w, h, pad) {
+    var min = Math.min.apply(null, arr), max = Math.max.apply(null, arr);
+    if (max - min < 1e-6) { max += 1; min -= 1; }
+    var pts = arr.map(function (v, i) {
+      return [(i / (arr.length - 1)) * w, pad + (1 - (v - min) / (max - min)) * (h - pad * 2)];
+    });
+    var line = 'M' + pts.map(function (p) { return p[0].toFixed(2) + ' ' + p[1].toFixed(2); }).join(' L');
+    return { line: line, area: line + ' L' + w + ' ' + h + ' L0 ' + h + ' Z' };
+  }
+
+  var jsonEl = document.getElementById('json');
+  var prevJson = {};
+  function renderJson(d) {
+    var data = {
+      tempC: d.tempC, tempF: d.tempC * 9 / 5 + 32, humidity: d.humidity,
+      pressure: d.pressure, ratio: d.ratio, pm25: d.pm25, pm10: d.pm10
+    };
+    var keys = Object.keys(data);
+    var html = '{\n' + keys.map(function (k, i) {
+      var v = data[k].toFixed(2);
+      var changed = prevJson[k] !== undefined && prevJson[k] !== v;
+      prevJson[k] = v;
+      return '  <span class="k">"' + k + '"</span>: <span class="n' + (changed ? ' flash' : '') + '">' + v + '</span>' + (i < keys.length - 1 ? ',' : '');
+    }).join('\n') + '\n}';
+    jsonEl.innerHTML = html;
+  }
+
+  var banner = document.getElementById('banner');
+  var bannerText = document.getElementById('bannerText');
+  function render() {
+    var alerts = [];
+    cards.forEach(function (c) {
+      c.el.querySelector('.val').innerHTML = c.fmt(state);
+      c.el.querySelector('.sub2').textContent = c.sub(state);
+      var p = sparkPath(hist[c.key], 100, 36, 3);
+      c.el.querySelector('.line').setAttribute('d', p.line);
+      c.el.querySelector('.area').setAttribute('d', p.area);
+      var bad = c.alert(state);
+      c.el.classList.toggle('alert', bad);
+      if (bad) alerts.push(alertNames[c.id]);
+    });
+    if (alerts.length) {
+      banner.classList.add('show');
+      bannerText.textContent = 'WARNING: Abnormal readings in: ' + alerts.join(', ');
+    } else {
+      banner.classList.remove('show');
+    }
+    renderJson(state);
+    renderHero();
+  }
+
+  // ---------- hero card ----------
+  var heroTemp = document.getElementById('heroTemp'), heroHum = document.getElementById('heroHum'),
+      heroPm = document.getElementById('heroPm'), heroPress = document.getElementById('heroPress'),
+      heroSpark = document.getElementById('heroSpark'), heroClock = document.getElementById('heroClock');
+  heroSpark.innerHTML =
+    '<defs><linearGradient id="hg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--c-temp)" stop-opacity=".35"/><stop offset="1" stop-color="var(--c-temp)" stop-opacity="0"/></linearGradient></defs>' +
+    '<path id="hArea" fill="url(#hg)"/><path id="hLine" fill="none" stroke="var(--c-temp)" stroke-width="2.2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>';
+  function renderHero() {
+    heroTemp.textContent = state.tempC.toFixed(1);
+    heroHum.textContent = Math.round(state.humidity) + '%';
+    heroPm.textContent = state.pm25;
+    heroPress.textContent = Math.round(state.pressure);
+    var p = sparkPath(hist.tempC, 300, 70, 6);
+    document.getElementById('hLine').setAttribute('d', p.line);
+    document.getElementById('hArea').setAttribute('d', p.area);
+  }
+  function clock() {
+    var d = new Date();
+    heroClock.textContent = [d.getHours(), d.getMinutes(), d.getSeconds()].map(function (n) { return String(n).padStart(2, '0'); }).join(':');
+  }
+
+  // ---------- loop ----------
+  var paused = false, last = Date.now();
+  var agoEl = document.getElementById('ago');
+  function step() {
+    tick();
+    cards.forEach(function (c) { hist[c.key].push(state[c.key]); if (hist[c.key].length > HIST) hist[c.key].shift(); });
+    last = Date.now();
+    render();
+  }
+  render();
+  clock();
+  setInterval(function () { if (!paused) step(); }, 2000);
+  setInterval(function () {
+    clock();
+    var s = Math.round((Date.now() - last) / 1000);
+    agoEl.textContent = paused ? 'Paused' : (s < 1 ? 'Updated just now' : 'Updated ' + s + 's ago');
+  }, 500);
+
+  document.getElementById('spikeBtn').addEventListener('click', function () {
+    spike = 5;
+    if (paused) { paused = false; pauseLabel.textContent = 'Pause'; }
+    step();
+  });
+  var pauseBtn = document.getElementById('pauseBtn');
+  var pauseLabel = pauseBtn.querySelector('span');
+  pauseBtn.addEventListener('click', function () {
+    paused = !paused;
+    pauseLabel.textContent = paused ? 'Resume' : 'Pause';
+  });
+})();
+</script>
+</body>
+</html>

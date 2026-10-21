@@ -55,13 +55,14 @@ The ESP32-S3 reads temperature, humidity, barometric pressure, gas level and fin
 
 | Qty | Part | Typical listing name | Notes |
 |----|------|----------------------|-------|
-| 1 | ESP32-S3 dev board | *ESP32-S3-DevKitC-1 N16R8* (or N8R2 / N8) | Onboard WS2812 RGB LED on GPIO48 |
-| 1 | Temperature/humidity sensor | *DHT22 / AM2302 module* | Modules include the 10 kΩ pull-up |
-| 1 | Pressure sensor | *GY-BMP280-3.3 breakout* | I²C address 0x76 (SDO→GND) or 0x77 |
-| 1 | Gas sensor | *MQ-135 air quality sensor module* | Use the analog **AO** pin. Needs a 24–48 h burn-in. |
-| 1 | Particulate sensor | *Plantower PMS5003 + G7/G5 adapter board* | 5 V supply, 3.3 V logic UART |
+| 1 | ESP32-S3 dev board | [ESP32-S3-DevKitC-1 with USB-C cable](https://www.amazon.com/dp/B0H7HQJ4NW) ([2-pack](https://www.amazon.com/dp/B0H7HVBNVQ)) | Onboard WS2812 RGB LED on GPIO48 |
+| 1 | Temperature/humidity sensor | [DHT22 module](https://www.amazon.com/dp/B0GSR68YH9) (sold as a 2-pack) | Modules include the 10 kΩ pull-up |
+| 1 | Pressure sensor | [BMP280 module, pre-soldered](https://www.amazon.com/dp/B0CD4PQZGQ) | I²C address 0x76 (SDO→GND) or 0x77 |
+| 1 | Gas sensor | [MQ-135 air quality module](https://www.amazon.com/dp/B0DQHJFCLD) | Use the analog **AO** pin. Needs a 24–48 h burn-in. |
+| 1 | Particulate sensor | [PMS5003 with adapter cable](https://www.amazon.com/dp/B0B1DQKV4N) | 5 V supply, 3.3 V logic UART |
+| 1 | Breadboard + jumper wires | [Breadboard kit, M-M / M-F / F-F wires](https://www.amazon.com/dp/B09VKYLYN7) | Full-size and half-size boards |
+| 1 | Breadboard power supply (optional) | *HW-131* | Tie its GND to the ESP32-S3 GND |
 | 2 | Resistors (optional) | 10 kΩ + 20 kΩ | Voltage divider for the MQ135 AO (see [Wiring](#wiring)) |
-| — | Breadboard, jumper wires, USB-C cable | | Use a data-capable USB cable |
 
 ---
 
@@ -69,9 +70,11 @@ The ESP32-S3 reads temperature, humidity, barometric pressure, gas level and fin
 
 All pin numbers come straight from [`firmware/weather_station/weather_station.ino`](firmware/weather_station/weather_station.ino).
 
+**Power rails:** connect the ESP32-S3 **5V** pin to the breadboard's + rail and **GND** to the − rail. The DHT22, MQ-135 and PMS5003 take power from those rails, and the BMP280 uses the board's 3V3 pin. If you add an HW-131 breadboard power supply, connect its GND to the ESP32-S3 GND.
+
 | Sensor | Sensor pin | ESP32-S3 pin | Notes |
 |--------|-----------|--------------|-------|
-| **DHT22** | VCC | 3V3 | |
+| **DHT22** | VCC | 5V rail | |
 | | DATA | **GPIO4** | `#define DHTPIN 4` |
 | | GND | GND | |
 | **BMP280** | VCC | 3V3 | **3.3 V only** |
@@ -229,7 +232,7 @@ The sketch only updates `pm25`/`pm10` after it receives a PMS5003 frame with a v
 <details>
 <summary><b>Temperature/humidity show 0</b></summary>
 
-The DHT22 returned `NaN`. Check that DATA goes to **GPIO4** and VCC to 3V3. A bare 4-pin DHT22 (not a module) needs a 10 kΩ pull-up between DATA and VCC. Also keep requests to `/data` at least 2 s apart, because the DHT22 can't be read faster.
+The DHT22 returned `NaN`. Check that DATA goes to **GPIO4** and VCC to the 5V rail. A bare 4-pin DHT22 (not a module) needs a 10 kΩ pull-up between DATA and VCC. Also keep requests to `/data` at least 2 s apart, because the DHT22 can't be read faster.
 </details>
 
 <details>
@@ -263,8 +266,19 @@ Copy `firmware/weather_station/secrets.example.h` to `secrets.h` in the same fol
 
 ---
 
+## Build log: problems we hit
+
+| Problem | Cause and fix |
+|---------|---------------|
+| MQ-135 readings were erratic | The heater was powered from 3.3 V. Moving it to the 5 V rail let the sensing layer reach its working temperature, and the readings settled. |
+| PMS5003 wouldn't turn on (no fan, no data) | The first dev board's 5V pin had failed. A replacement board fixed it, so measure the 5V pin before you blame the sensor. |
+| Dashboard froze or dropped dust values | Reading the PMS5003 data was getting in the way of answering web requests. `loop()` now handles web clients and reads the sensor data in turns, keeping the last valid reading, so `/data` always answers straight away. |
+
+---
+
 ## Future ideas
 
+- Add a **UV sensor** (VEML6075) for the outdoor UV-A/UV-B index
 - Read **PM1.0**. The PMS5003 already sends it in bytes 8–9 of each frame.
 - Calculate a standard **AQI** from PM2.5/PM10 and colour the NeoPixel to match
 - **Wi-Fi provisioning** (WiFiManager / captive portal) instead of `secrets.h`

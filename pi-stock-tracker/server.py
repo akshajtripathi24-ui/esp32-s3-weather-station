@@ -28,7 +28,7 @@ CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
 INDICES = [("^GSPC", "S&P 500", "SPY"), ("^NDX", "Nasdaq 100", "QQQ"),
            ("^DJI", "Dow Jones", "DIA"), ("^RUT", "Russell 2000", "IWM")]
 FINNHUB_WS = "wss://ws.finnhub.io?token={}"
-LIVE_MAX = 50        # Finnhub's free plan streams up to 50 symbols at once
+LIVE_MAX = 45        # Finnhub's free plan allows 50 symbols at once; keep a little room spare
 LIVE_IDLE = 30       # stop streaming a stock 30 s after nobody is looking at it
 
 # Chart range buttons -> (Yahoo range, Yahoo interval)
@@ -49,7 +49,8 @@ cache = {}       # small in-memory cache for charts and index quotes
 status = {"updated": None, "updated_ts": 0, "source": None, "crawl_done": 0, "crawl_total": 0, "profiles_ok": True}
 live = {}        # Finnhub symbol -> {"p": last trade price, "t": trade time (epoch seconds)}
 live_wanted = {} # our symbol -> last time a browser asked for it
-live_state = {"enabled": False, "connected": False, "subscribed": set(), "error": None}
+live_state = {"enabled": False, "connected": False, "subscribed": set(), "error": None, "cap": LIVE_MAX,
+              "cap_ts": 0}
 lock = threading.Lock()
 
 
@@ -312,7 +313,7 @@ def live_targets():
     now = time.time()
     out = [etf for _, _, etf in INDICES]
     for sym, _ in sorted(list(live_wanted.items()), key=lambda x: -x[1]):
-        if now - live_wanted.get(sym, 0) > LIVE_IDLE or len(out) >= LIVE_MAX:
+        if now - live_wanted.get(sym, 0) > LIVE_IDLE or len(out) >= live_state["cap"]:
             break
         f = fh_symbol(sym)
         if f not in out and "^" not in f:
@@ -327,19 +328,25 @@ def live_forever(key):
 
     def sync_subscriptions(ws):
         while live_state["connected"]:
-            want, have = live_targets(), live_state["subscribed"]
+            if live_state["cap"] < LIVE_MAX and time.time() - live_state["cap_ts"] > 300:
+                live_state["cap"] = min(LIVE_MAX, live_state["cap"] + 5)   # try a few more after 5 quiet minutes
+                live_state["cap_ts"] = time.time()
+            want, have = live_targets(), set(live_state["subscribed"])
             try:
-                for s in want - have:
-                    ws.send(json.dumps({"type": "subscribe", "symbol": s}))
-                for s in have - want:
+                for s in have - want:      # drop old symbols first so we never go over the limit
                     ws.send(json.dumps({"type": "unsubscribe", "symbol": s}))
+                    live_state["subscribed"].discard(s)
+                for s in want - have:
+                    if len(live_state["subscribed"]) >= live_state["cap"]:
+                        break
+                    ws.send(json.dumps({"type": "subscribe", "symbol": s}))
+                    live_state["subscribed"].add(s)
             except Exception:
                 return
-            live_state["subscribed"] = want
             time.sleep(1)
 
     def on_open(ws):
-        live_state.update(connected=True, error=None, subscribed=set())
+        live_state.update(connected=True, error=None, subscribed=set(), cap=LIVE_MAX)
         print("Live prices connected (Finnhub)")
         threading.Thread(target=sync_subscriptions, args=(ws,), daemon=True).start()
 
@@ -352,8 +359,16 @@ def live_forever(key):
             for t in msg.get("data") or []:
                 live[t["s"]] = {"p": t["p"], "t": t["t"] / 1000}
         elif msg.get("type") == "error":
-            live_state["error"] = msg.get("msg")
-            print("Finnhub error:", msg.get("msg"))
+            text = msg.get("msg") or "unknown error"
+            if "too many" in text.lower():
+                # Over Finnhub's limit (another copy using the same key?) - stream fewer, at most every 10 s
+                if time.time() - live_state["cap_ts"] > 10:
+                    live_state["cap"] = max(len(INDICES), min(live_state["cap"], len(live_state["subscribed"])) - 5)
+                    live_state["cap_ts"] = time.time()
+                text = f"{text} - now streaming at most {live_state['cap']} stocks"
+            if text != live_state["error"]:
+                print("Finnhub error:", text)
+            live_state["error"] = text
 
     def on_error(ws, error):
         text = str(error)

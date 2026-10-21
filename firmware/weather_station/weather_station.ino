@@ -1,266 +1,383 @@
 // ESP32-S3 IoT Weather Station
-// DHT22 + BMP280 + MQ135 + PMS5003, live dashboard at "/" and JSON at "/data".
+// DHT22 + BMP280 + MQ-135 + PMS5003 with a fully non-blocking main loop.
+//   /      live dashboard (served from dashboard.h)
+//   /ws    WebSocket stream, one JSON frame per second
+//   /data  JSON snapshot for scripts and integrations
 // Wi-Fi credentials live in secrets.h (copy secrets.example.h to get started).
 
 #include <WiFi.h>
-#include <WebServer.h>
+#include <ESPmDNS.h>
 #include <Wire.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 #include <DHT.h>
 #include <Adafruit_BMP280.h>
 #include <Adafruit_NeoPixel.h>
 #include "secrets.h"
+#include "dashboard.h"
 
-const char* ssid = WIFI_SSID;
-const char* password = WIFI_PASSWORD;
-
-WebServer server(80);
-
-#define DHTPIN 4
-#define DHTTYPE DHT22
-const int mq135Pin = 1;
-
-#define RGB_PIN 48
+// ---------- pins ----------
+#define DHTPIN     4
+#define DHTTYPE    DHT22
+#define I2C_SDA    8
+#define I2C_SCL    9
+#define MQ135_PIN  1
+#define PMS_RX     15   // ESP32 RX <- PMS5003 TX
+#define PMS_TX     7    // ESP32 TX -> PMS5003 RX
+#define RGB_PIN    48
 #define NUM_PIXELS 1
-Adafruit_NeoPixel pixels(NUM_PIXELS, RGB_PIN, NEO_GRB + NEO_KHZ800);
 
+const char* HOSTNAME = "weather";   // dashboard also answers at http://weather.local
+
+// ---------- timing (ms) ----------
+const uint32_t DHT_INTERVAL        = 2000;   // the DHT22 can't be read faster than this
+const uint32_t BMP_INTERVAL        = 1000;
+const uint32_t BMP_RETRY_INTERVAL  = 10000;  // re-detect a missing BMP280
+const uint32_t MQ_SAMPLE_INTERVAL  = 10;     // one ADC sample per tick, averaged in batches
+const uint8_t  MQ_SAMPLES          = 32;
+const uint32_t PMS_STALE_AFTER     = 10000;  // report PM as null if no valid frame for this long
+const uint32_t BROADCAST_INTERVAL  = 1000;
+const uint32_t WIFI_RETRY_INTERVAL = 15000;
+const uint32_t WIFI_GIVE_UP_LED    = 20000;  // LED turns purple after this long without Wi-Fi
+const uint32_t LOG_INTERVAL        = 5000;
+const uint8_t  DHT_MAX_FAILS       = 3;      // consecutive bad reads before reporting null
+
+// ---------- MQ-135 ----------
+const float SENSOR_VCC = 5.0;    // voltage powering the MQ-135 module
+const float DIVIDER    = 1.0;    // 1.0 = AO wired straight to GPIO1; 1.5 = 10k + 20k divider
+const float RL         = 20000.0;
+float ro               = 31645.37;  // Rs in clean air; recalibrate per sensor (see README)
+const float ATMO_CO2   = 420.0;     // ppm of CO2 in clean outdoor air
+const float MQ_CURVE_B = -2.769034857;  // CO2 curve slope from the MQ-135 datasheet
+
+// ---------- objects ----------
+Adafruit_NeoPixel pixels(NUM_PIXELS, RGB_PIN, NEO_GRB + NEO_KHZ800);
 DHT dht(DHTPIN, DHTTYPE);
 Adafruit_BMP280 bmp;
+AsyncWebServer server(80);
+AsyncWebSocket ws("/ws");
 
-const int PMS_RX = 15;
-const int PMS_TX = 7;
-float pm25 = 0;
-float pm10 = 0;
+// ---------- shared state ----------
+// Written by loop(), read by the async web task, so access goes through liveMux.
+struct Readings {
+  float tempC    = NAN;
+  float humidity = NAN;
+  float pressure = NAN;
+  float ratio    = NAN;
+  float ppm      = NAN;
+  float pm1      = NAN;
+  float pm25     = NAN;
+  float pm10     = NAN;
+  uint32_t pmsAt = 0;   // millis() of the last valid PMS5003 frame
+};
+Readings live;
+portMUX_TYPE liveMux = portMUX_INITIALIZER_UNLOCKED;
 
-const float SENSOR_VCC = 5.0;   // voltage powering the MQ135 module
-const float DIVIDER    = 1.0;   // 1.0 = AO wired straight to GPIO1; 1.5 = 10k + 20k divider
-const float rl = 20000.0;
-float ro = 31645.37;            // recalibrate, see below
+bool bmpOk = false;
+bool wifiUp = false;
+uint32_t pmsGoodFrames = 0;
+uint32_t pmsBadFrames = 0;
+float mqRs = NAN;
+volatile uint32_t ledFlashUntil = 0;
 
-float readMq135Ratio() {
-  uint32_t sum = 0;
-  for (int i = 0; i < 32; i++) { sum += analogReadMilliVolts(mq135Pin); delay(2); }
-  float vOut = (sum / 32.0) * DIVIDER / 1000.0;   // volts at the sensor's AO pin
-  if (vOut < 0.01) return 1.0;
-  if (vOut > SENSOR_VCC - 0.01) vOut = SENSOR_VCC - 0.01;
-  float rs = rl * ((SENSOR_VCC - vOut) / vOut);
-  Serial.printf("MQ135 AO=%.2f V  Rs=%.0f\n", vOut, rs);
-  float r = rs / ro;
+const size_t JSON_SIZE = 320;
 
+Readings snapshot() {
+  portENTER_CRITICAL(&liveMux);
+  Readings r = live;
+  portEXIT_CRITICAL(&liveMux);
+  return r;
+}
+
+// Formats a number, or "null" so the dashboard can show "--" for a failed sensor.
+const char* num(char* buf, float v, int decimals) {
+  if (isnan(v)) return "null";
+  snprintf(buf, 16, "%.*f", decimals, v);
+  return buf;
+}
+
+size_t buildJson(char* out, size_t size) {
+  Readings r = snapshot();
+  bool pmsFresh = r.pmsAt != 0 && millis() - r.pmsAt < PMS_STALE_AFTER;
+  float tempF = isnan(r.tempC) ? NAN : r.tempC * 1.8f + 32.0f;
+
+  char a[16], b[16], c[16], d[16], e[16], f[16], g[16], h[16], i[16];
+  return snprintf(out, size,
+    "{\"tempC\":%s,\"tempF\":%s,\"humidity\":%s,\"pressure\":%s,"
+    "\"ratio\":%s,\"ppm\":%s,\"pm1\":%s,\"pm25\":%s,\"pm10\":%s,"
+    "\"uptime\":%lu,\"rssi\":%d,\"clients\":%u}",
+    num(a, r.tempC, 2), num(b, tempF, 2), num(c, r.humidity, 2), num(d, r.pressure, 2),
+    num(e, r.ratio, 3), num(f, r.ppm, 0),
+    num(g, pmsFresh ? r.pm1 : NAN, 0), num(h, pmsFresh ? r.pm25 : NAN, 0), num(i, pmsFresh ? r.pm10 : NAN, 0),
+    (unsigned long)(millis() / 1000), wifiUp ? (int)WiFi.RSSI() : 0, (unsigned)ws.count());
+}
+
+// ---------- PMS5003: byte-by-byte state machine, never blocks ----------
+void pollPMS5003() {
+  static uint8_t frame[32];
+  static uint8_t pos = 0;
+  int budget = 64;   // cap bytes per pass so the loop stays responsive
+
+  while (Serial1.available() && budget-- > 0) {
+    uint8_t byteIn = Serial1.read();
+
+    if (pos == 0 && byteIn != 0x42) continue;
+    if (pos == 1 && byteIn != 0x4D) {
+      pos = (byteIn == 0x42) ? 1 : 0;   // a stray 0x42 may be the start of the next frame
+      continue;
+    }
+    frame[pos++] = byteIn;
+    if (pos < sizeof(frame)) continue;
+    pos = 0;
+
+    uint16_t length = (frame[2] << 8) | frame[3];
+    uint16_t sum = 0;
+    for (int k = 0; k < 30; k++) sum += frame[k];
+    uint16_t checksum = (frame[30] << 8) | frame[31];
+    if (length != 28 || sum != checksum) {
+      pmsBadFrames++;
+      continue;
+    }
+
+    // Atmospheric-environment values (frame bytes 10-15)
+    portENTER_CRITICAL(&liveMux);
+    live.pm1   = (frame[10] << 8) | frame[11];
+    live.pm25  = (frame[12] << 8) | frame[13];
+    live.pm10  = (frame[14] << 8) | frame[15];
+    live.pmsAt = millis();
+    portEXIT_CRITICAL(&liveMux);
+    pmsGoodFrames++;
+  }
+}
+
+// ---------- MQ-135: one sample per tick instead of a blocking burst ----------
+void pollMQ135(uint32_t now) {
+  static uint32_t last = 0;
+  static uint32_t sum = 0;
+  static uint8_t count = 0;
   static float smooth = -1;
-  smooth = (smooth < 0) ? r : 0.9 * smooth + 0.1 * r;
-  return smooth;
+
+  if (now - last < MQ_SAMPLE_INTERVAL) return;
+  last = now;
+
+  sum += analogReadMilliVolts(MQ135_PIN);
+  if (++count < MQ_SAMPLES) return;
+
+  float vOut = (sum / (float)MQ_SAMPLES) * DIVIDER / 1000.0f;   // volts at the sensor's AO pin
+  sum = 0;
+  count = 0;
+  if (vOut < 0.01f) return;   // no signal, keep the last value
+  if (vOut > SENSOR_VCC - 0.01f) vOut = SENSOR_VCC - 0.01f;
+
+  float rs = RL * ((SENSOR_VCC - vOut) / vOut);
+  float r = rs / ro;
+  smooth = (smooth < 0) ? r : 0.9f * smooth + 0.1f * r;
+  mqRs = rs;
+
+  portENTER_CRITICAL(&liveMux);
+  live.ratio = smooth;
+  live.ppm = ATMO_CO2 * powf(smooth, MQ_CURVE_B);   // CO2-equivalent estimate
+  portEXIT_CRITICAL(&liveMux);
 }
 
-void readPMS5003() {
-  Serial1.setTimeout(50);
-  while (Serial1.available()) {
-    if (Serial1.read() != 0x42) continue;
-    if (Serial1.read() != 0x4D) continue;
+// ---------- DHT22 ----------
+void pollDHT(uint32_t now) {
+  static uint32_t last = 0;
+  static uint8_t fails = 0;
+  if (now - last < DHT_INTERVAL) return;
+  last = now;
 
-    uint8_t buffer[30];
-    if (Serial1.readBytes(buffer, 30) != 30) return;
+  float t = dht.readTemperature();
+  float h = dht.readHumidity();
+  bool ok = !isnan(t) && !isnan(h);
+  if (ok) fails = 0;
+  else if (fails < DHT_MAX_FAILS) fails++;
 
-    uint16_t sum = 0x42 + 0x4D;
-    for (int i = 0; i < 28; i++) sum += buffer[i];
-    uint16_t checksum = (buffer[28] << 8) | buffer[29];
-    if (sum != checksum) continue;
+  // Ride out an occasional bad read, report null once the sensor is really gone
+  if (!ok && fails < DHT_MAX_FAILS) return;
+  portENTER_CRITICAL(&liveMux);
+  live.tempC = ok ? t : NAN;
+  live.humidity = ok ? h : NAN;
+  portEXIT_CRITICAL(&liveMux);
+}
 
-    pm25 = (buffer[10] << 8) | buffer[11];
-    pm10 = (buffer[12] << 8) | buffer[13];
+// ---------- BMP280 ----------
+bool beginBMP() {
+  if (bmp.begin(0x76)) { Serial.println("BMP280 found at 0x76"); return true; }
+  if (bmp.begin(0x77)) { Serial.println("BMP280 found at 0x77"); return true; }
+  return false;
+}
 
-    Serial.printf("PM2.5=%u PM10=%u\n", (unsigned)pm25, (unsigned)pm10);
+void pollBMP(uint32_t now) {
+  static uint32_t last = 0;
+  static uint32_t lastRetry = 0;
+
+  if (!bmpOk) {
+    if (now - lastRetry < BMP_RETRY_INTERVAL) return;
+    lastRetry = now;
+    bmpOk = beginBMP();
+    if (!bmpOk) Serial.println("BMP280 not found on 0x76 or 0x77, retrying in 10 s");
+    return;
+  }
+
+  if (now - last < BMP_INTERVAL) return;
+  last = now;
+
+  float pa = bmp.readPressure();
+  bool valid = !isnan(pa) && pa > 30000 && pa < 120000;
+  portENTER_CRITICAL(&liveMux);
+  live.pressure = valid ? pa / 100.0f : NAN;
+  portEXIT_CRITICAL(&liveMux);
+  if (!valid) bmpOk = false;   // re-detect on the next retry
+}
+
+// ---------- Wi-Fi: reconnect in the background ----------
+void pollWiFi(uint32_t now) {
+  static bool wasUp = false;
+  static bool mdnsStarted = false;
+  static uint32_t lastAttempt = 0;
+
+  wifiUp = WiFi.status() == WL_CONNECTED;
+
+  if (wifiUp && !wasUp) {
+    Serial.printf("Connected! IP Address: http://%s  (or http://%s.local)\n",
+                  WiFi.localIP().toString().c_str(), HOSTNAME);
+    if (!mdnsStarted && MDNS.begin(HOSTNAME)) {
+      MDNS.addService("http", "tcp", 80);
+      mdnsStarted = true;
+    }
+  }
+  if (!wifiUp && wasUp) {
+    Serial.println("Wi-Fi lost, reconnecting...");
+    lastAttempt = now;
+  }
+  if (!wifiUp && now - lastAttempt >= WIFI_RETRY_INTERVAL) {
+    lastAttempt = now;
+    WiFi.reconnect();
+  }
+  wasUp = wifiUp;
+}
+
+// ---------- WebSocket ----------
+void broadcast(uint32_t now) {
+  static uint32_t last = 0;
+  if (now - last < BROADCAST_INTERVAL) return;
+  last = now;
+
+  ws.cleanupClients();
+  if (ws.count() == 0 || !ws.availableForWriteAll()) return;   // skip a frame rather than queue up
+
+  char json[JSON_SIZE];
+  buildJson(json, sizeof(json));
+  ws.textAll(json);
+}
+
+void onWsEvent(AsyncWebSocket* server, AsyncWebSocketClient* client, AwsEventType type,
+               void* arg, uint8_t* data, size_t len) {
+  if (type == WS_EVT_CONNECT) {
+    char json[JSON_SIZE];
+    buildJson(json, sizeof(json));
+    client->text(json);   // new clients get data right away
+  } else if (type == WS_EVT_DATA) {
+    // Echo "ping:<t>" as "pong:<t>" so the dashboard can show round-trip time
+    AwsFrameInfo* info = (AwsFrameInfo*)arg;
+    if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT &&
+        len > 5 && len < 40 && memcmp(data, "ping:", 5) == 0) {
+      char reply[48] = "pong:";
+      memcpy(reply + 5, data + 5, len - 5);
+      reply[len] = '\0';
+      client->text(reply);
+    }
   }
 }
 
-void handleRoot() {
-  pixels.setPixelColor(0, pixels.Color(0, 0, 255));
-  pixels.show();
-
-  String html = "<!DOCTYPE html><html>";
-  html += "<head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>";
-  html += "<title>Live IoT Weather Station</title>";
-  html += "<style>";
-  html += "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 20px; }";
-  html += ".container { max-width: 600px; margin: auto; background: #1e293b; padding: 24px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }";
-  html += "h1 { text-align: center; color: #38bdf8; font-size: 24px; margin-bottom: 24px; }";
-  html += ".grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }";
-  html += ".card { background: #334155; padding: 16px; border-radius: 12px; border-left: 5px solid #38bdf8; transition: all 0.3s ease; }";
-  html += ".card.orange { border-left-color: #f97316; }";
-  html += ".card.green { border-left-color: #22c55e; }";
-  html += ".card.purple { border-left-color: #a855f7; }";
-  html += ".card.pink { border-left-color: #ec4899; }";
-  html += ".card.teal { border-left-color: #14b8a6; }";
-  html += ".card.alert { border-left-color: #ef4444; background: #451a03; }";
-  html += ".title { font-size: 13px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }";
-  html += ".value { font-size: 22px; font-weight: bold; margin-top: 8px; color: #f1f5f9; }";
-  html += ".footer { text-align: center; margin-top: 20px; font-size: 12px; color: #64748b; }";
-  html += "#alert-banner { display: none; background: #ef4444; color: white; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 16px; animation: pulse 1s infinite; }";
-  html += "@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }";
-  html += "</style>";
-  html += "<script>";
-
-  html += "let audioCtx = null;";
-  html += "function playBeep() {";
-  html += "  if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }";
-  html += "  let osc = audioCtx.createOscillator();";
-  html += "  let gain = audioCtx.createGain();";
-  html += "  osc.type = 'sine';";
-  html += "  osc.frequency.setValueAtTime(880, audioCtx.currentTime);";
-  html += "  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);";
-  html += "  osc.connect(gain);";
-  html += "  gain.connect(audioCtx.destination);";
-  html += "  osc.start();";
-  html += "  osc.stop(audioCtx.currentTime + 0.3);";
-  html += "}";
-
-  html += "function updateData() {";
-  html += "  fetch('/data').then(response => response.json()).then(data => {";
-  html += "    document.getElementById('temp').innerHTML = data.tempC.toFixed(1) + ' &deg;C / ' + data.tempF.toFixed(1) + ' &deg;F';";
-  html += "    document.getElementById('humidity').innerHTML = data.humidity.toFixed(1) + ' %';";
-  html += "    document.getElementById('pressure').innerHTML = data.pressure.toFixed(1) + ' hPa';";
-  html += "    document.getElementById('mq135').innerHTML = data.ratio.toFixed(2) + ' <span style=\"font-size:14px;color:#94a3b8;\">Ratio</span>';";
-  html += "    document.getElementById('pm25').innerHTML = data.pm25.toFixed(1) + ' &mu;g/m&sup3;';";
-  html += "    document.getElementById('pm10').innerHTML = data.pm10.toFixed(1) + ' &mu;g/m&sup3;';";
-
-  html += "    let tempCard = document.getElementById('temp-card');";
-  html += "    let humCard = document.getElementById('hum-card');";
-  html += "    let pressCard = document.getElementById('press-card');";
-  html += "    let mqCard = document.getElementById('mq-card');";
-  html += "    let pm25Card = document.getElementById('pm25-card');";
-  html += "    let pm10Card = document.getElementById('pm10-card');";
-  html += "    let banner = document.getElementById('alert-banner');";
-
-  html += "    let alerts = [];";
-
-  html += "    if (data.tempC > 45 || data.tempC < 0) { tempCard.className = 'card alert'; alerts.push('Temperature'); } else { tempCard.className = 'card'; }";
-  html += "    if (data.humidity > 85 || data.humidity < 20) { humCard.className = 'card orange alert'; alerts.push('Humidity'); } else { humCard.className = 'card orange'; }";
-  html += "    if (data.pressure < 550 || data.pressure > 1400) { pressCard.className = 'card purple alert'; alerts.push('Pressure'); } else { pressCard.className = 'card purple'; }";
-  html += "    if (data.ratio < 0.60) { mqCard.className = 'card alert'; alerts.push('Air Quality'); } else { mqCard.className = 'card green'; }";
-  html += "    if (data.pm25 > 65) { pm25Card.className = 'card alert'; alerts.push('PM2.5'); } else { pm25Card.className = 'card pink'; }";
-  html += "    if (data.pm10 > 150.0) { pm10Card.className = 'card alert'; alerts.push('PM10'); } else { pm10Card.className = 'card teal'; }";
-
-  html += "    if (alerts.length > 0) {";
-  html += "      banner.style.display = 'block';";
-  html += "      banner.innerHTML = 'WARNING: Abnormal readings in: ' + alerts.join(', ');";
-  html += "      playBeep();";
-  html += "    } else { banner.style.display = 'none'; }";
-
-  html += "  }).catch(err => console.log('Error fetching data:', err));";
-  html += "}";
-  html += "setInterval(updateData, 2000);";
-  html += "</script>";
-  html += "</head><body>";
-
-  html += "<div class='container'>";
-  html += "<h1>Live IoT Weather Station</h1>";
-  html += "<div id='alert-banner'></div>";
-  html += "<div class='grid'>";
-
-  html += "<div class='card' id='temp-card'><div class='title'>Temperature</div><div class='value' id='temp'>Loading...</div></div>";
-  html += "<div class='card orange' id='hum-card'><div class='title'>Humidity</div><div class='value' id='humidity'>Loading...</div></div>";
-  html += "<div class='card purple' id='press-card'><div class='title'>Pressure</div><div class='value' id='pressure'>Loading...</div></div>";
-  html += "<div class='card green' id='mq-card'><div class='title'>Air Quality (Rs/Ro)</div><div class='value' id='mq135'>Loading...</div></div>";
-  html += "<div class='card pink' id='pm25-card'><div class='title'>PM2.5 Dust</div><div class='value' id='pm25'>Loading...</div></div>";
-  html += "<div class='card teal' id='pm10-card'><div class='title'>PM10 Dust</div><div class='value' id='pm10'>Loading...</div></div>";
-
-  html += "</div>";
-  html += "<div class='footer'>Live AJAX Stream &bull; Updates seamlessly every 2s</div>";
-  html += "</div>";
-  html += "</body></html>";
-
-  server.send(200, "text/html; charset=utf-8", html);
-
-  pixels.setPixelColor(0, pixels.Color(0, 250, 0));
+// ---------- status LED ----------
+// Red: connecting, purple: Wi-Fi down, green: online, blue flash: dashboard served
+void updateLed(uint32_t now) {
+  static uint32_t shown = 0xFFFFFFFF;
+  static bool everConnected = false;
+  uint32_t color;
+  if (wifiUp) {
+    everConnected = true;
+    color = ((int32_t)(ledFlashUntil - now) > 0) ? pixels.Color(0, 0, 255) : pixels.Color(0, 250, 0);
+  } else if (!everConnected && now < WIFI_GIVE_UP_LED) {
+    color = pixels.Color(255, 0, 0);
+  } else {
+    color = pixels.Color(128, 0, 128);
+  }
+  if (color == shown) return;
+  shown = color;
+  pixels.setPixelColor(0, color);
   pixels.show();
 }
 
-void handleData() {
-  float humidity = dht.readHumidity();
-  float tempC = dht.readTemperature();
-  float tempF = dht.readTemperature(true);
-
-  float pressure = 728.0;
-  float rawPressure = bmp.readPressure();
-  if (!isnan(rawPressure) && rawPressure > 0) {
-    pressure = rawPressure / 100.0F;
-  }
-
-  float ratio = readMq135Ratio();
-
-  if (isnan(humidity)) humidity = 0;
-  if (isnan(tempC)) { tempC = 0; tempF = 0; }
-
-  String json = "{";
-  json += "\"tempC\":" + String(tempC) + ",";
-  json += "\"tempF\":" + String(tempF) + ",";
-  json += "\"humidity\":" + String(humidity) + ",";
-  json += "\"pressure\":" + String(pressure) + ",";
-  json += "\"ratio\":" + String(ratio) + ",";
-  json += "\"pm25\":" + String(pm25) + ",";
-  json += "\"pm10\":" + String(pm10);
-  json += "}";
-
-  server.send(200, "application/json", json);
+void logStatus(uint32_t now) {
+  static uint32_t last = 0;
+  if (now - last < LOG_INTERVAL) return;
+  last = now;
+  Readings r = snapshot();
+  Serial.printf("T=%.1fC H=%.1f%% P=%.1fhPa | MQ Rs=%.0f ratio=%.2f ~%.0fppm | PM1=%.0f PM2.5=%.0f PM10=%.0f "
+                "(frames ok=%lu bad=%lu) | WiFi=%s clients=%u\n",
+                r.tempC, r.humidity, r.pressure, mqRs, r.ratio, r.ppm, r.pm1, r.pm25, r.pm10,
+                (unsigned long)pmsGoodFrames, (unsigned long)pmsBadFrames,
+                wifiUp ? "up" : "down", (unsigned)ws.count());
 }
 
 void setup() {
   Serial.begin(115200);
+  Serial1.setRxBufferSize(256);
   Serial1.begin(9600, SERIAL_8N1, PMS_RX, PMS_TX);
-  delay(1000);
 
   pixels.begin();
   pixels.setBrightness(30);
-
-  pinMode(mq135Pin, INPUT);
-  analogSetAttenuation(ADC_11db);
-
-  dht.begin();
-  Wire.begin(8,9);
-
-  if (!bmp.begin(0x76)) {
-    if (!bmp.begin(0x77)) {
-      Serial.println("Could not find a valid BMP280 sensor on 0x76 or 0x77!");
-    } else {
-      Serial.println("BMP280 found on secondary address 0x77!");
-    }
-  } else {
-    Serial.println("BMP280 found on primary address 0x76!");
-  }
-
   pixels.setPixelColor(0, pixels.Color(255, 0, 0));
   pixels.show();
 
-  WiFi.begin(ssid, password);
-  Serial.print("Connecting to Wi-Fi");
+  pinMode(MQ135_PIN, INPUT);
+  analogSetAttenuation(ADC_11db);
 
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-    if (attempts > 40) {
-      Serial.println("\nWi-Fi connection failed!");
-      pixels.setPixelColor(0, pixels.Color(128, 0, 128));
-      pixels.show();
-      break;
-    }
-  }
+  dht.begin();
+  Wire.begin(I2C_SDA, I2C_SCL);
+  bmpOk = beginBMP();
+  if (!bmpOk) Serial.println("BMP280 not found on 0x76 or 0x77, retrying in 10 s");
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println();
-    Serial.print("Connected! IP Address: http://");
-    Serial.println(WiFi.localIP());
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(HOSTNAME);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.println("Connecting to Wi-Fi...");
 
-    pixels.setPixelColor(0, pixels.Color(0, 250, 0));
-    pixels.show();
-  }
+  ws.onEvent(onWsEvent);
+  server.addHandler(&ws);
 
-  server.on("/", handleRoot);
-  server.on("/data", handleData);
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+    ledFlashUntil = millis() + 150;
+    request->send(200, "text/html; charset=utf-8", (const uint8_t*)DASHBOARD_HTML, strlen(DASHBOARD_HTML));
+  });
+
+  server.on("/data", HTTP_GET, [](AsyncWebServerRequest* request) {
+    char json[JSON_SIZE];
+    buildJson(json, sizeof(json));
+    AsyncWebServerResponse* response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    request->send(response);
+  });
+
+  server.onNotFound([](AsyncWebServerRequest* request) {
+    request->send(404, "text/plain", "Not found");
+  });
+
   server.begin();
 }
 
 void loop() {
-  server.handleClient();
-  readPMS5003();   // keep the dust sensor serial buffer drained and values fresh
+  uint32_t now = millis();
+  pollWiFi(now);
+  pollPMS5003();
+  pollMQ135(now);
+  pollDHT(now);
+  pollBMP(now);
+  broadcast(now);
+  updateLed(now);
+  logStatus(now);
 }

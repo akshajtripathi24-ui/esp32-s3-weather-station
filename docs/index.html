@@ -301,7 +301,26 @@ td.note { color: var(--text-muted); white-space: normal; min-width: 220px; }
 .banner.show { display: flex; }
 .banner svg { width: 18px; height: 18px; flex-shrink: 0; }
 @keyframes pulse { 50% { opacity: .72; } }
-.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.card { cursor: pointer; }
+.card.sel { border-color: var(--c); }
+.conn-pill {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-elev); font-size: 13px; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.cdot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+.conn-pill.live .cdot { background: #22c55e; animation: ping 2s infinite; }
+.conn-pill.retry .cdot { background: #f59e0b; }
+.conn-pill.offline .cdot { background: var(--danger); }
+.chart-panel { margin-top: 12px; border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: var(--bg); }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; margin-bottom: 6px; }
+.chart-head span { font-size: 12.5px; color: var(--text-faint); }
+.chart-box { position: relative; height: 150px; }
+.chart-box svg { width: 100%; height: 100%; display: block; }
+.chart-box .axis { position: absolute; left: 0; font-size: 11.5px; color: var(--text-faint); background: var(--bg); padding: 0 4px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.chart-box .axis.top { top: 0; }
+.chart-box .axis.bot { bottom: 0; }
 .card {
   --c: var(--accent);
   border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px 10px; background: var(--bg);
@@ -455,7 +474,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
       </div>
       <div class="hero-meta">
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12.55a11 11 0 0 1 14 0M8.5 16a6 6 0 0 1 7 0M12 20h.01M2 8.82a15 15 0 0 1 20 0"/></svg>No cloud, local Wi-Fi only</span>
-        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>Refreshes every 2 s</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5"/></svg>Live WebSocket stream</span>
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg>JSON API at /data</span>
       </div>
     </div>
@@ -517,24 +536,24 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg></div>
         <h3>Air pollution &amp; gases</h3>
         <div class="part">MQ-135 gas sensor · analog</div>
-        <p>A heated sensing layer changes resistance when ammonia, benzene, smoke or other pollutants touch it. The firmware reports this as an Rs/Ro ratio, where lower means more gas.</p>
+        <p>A heated sensing layer changes resistance when ammonia, benzene, smoke or other pollutants touch it. The firmware turns that into an estimated CO₂-equivalent ppm value.</p>
         <p class="used"><b>Used in</b>street-side air monitors, smoke and gas-leak alarms, office air-quality meters</p>
-        <div class="tags"><span class="tag pin">GPIO1</span><span class="tag">Rs/Ro</span><span class="tag">5 V heater</span></div>
+        <div class="tags"><span class="tag pin">GPIO1</span><span class="tag">ppm (est.)</span><span class="tag">5 V heater</span></div>
       </article>
       <article class="feature" style="--c: var(--c-pm25)">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="7" r="1.6"/><circle cx="14" cy="5" r="1"/><circle cx="18" cy="11" r="2"/><circle cx="9" cy="14" r="1.2"/><circle cx="15" cy="18" r="1.5"/><circle cx="5" cy="19" r="1"/></svg></div>
-        <h3>Fine dust (PM2.5 / PM10)</h3>
+        <h3>Fine dust (PM1.0 / 2.5 / 10)</h3>
         <div class="part">Plantower PMS5003 · UART</div>
-        <p>A tiny fan pulls air past a laser. The way particles scatter the light gives PM2.5 (smoke, soot) and PM10 (dust, pollen) levels in µg/m³.</p>
+        <p>A tiny fan pulls air past a laser. The way particles scatter the light gives PM1.0, PM2.5 (smoke, soot) and PM10 (dust, pollen) levels in µg/m³, with every frame checksum-verified.</p>
         <p class="used"><b>Used in</b>city smog monitoring, wildfire smoke tracking, air purifiers</p>
         <div class="tags"><span class="tag pin">RX GPIO15</span><span class="tag pin">TX GPIO7</span><span class="tag">9600 baud</span></div>
       </article>
       <article class="feature" style="--c: var(--accent)">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M7 9l3 3-3 3M13 15h4"/></svg></div>
-        <h3>Web dashboard + API</h3>
-        <div class="part">ESP32 WebServer · port 80</div>
-        <p>A responsive dashboard at <code>/</code> with alert banners and a beep, plus a JSON endpoint at <code>/data</code> for your own tools.</p>
-        <div class="tags"><span class="tag pin">GET /</span><span class="tag pin">GET /data</span><span class="tag">2 s polling</span></div>
+        <h3>Live dashboard + API</h3>
+        <div class="part">ESPAsyncWebServer · WebSocket</div>
+        <p>Readings stream over a WebSocket every second to a dashboard with live charts, alerts and a connection indicator that shows ping time and reconnects by itself.</p>
+        <div class="tags"><span class="tag pin">GET /</span><span class="tag pin">WS /ws</span><span class="tag pin">GET /data</span></div>
       </article>
     </div>
   </div>
@@ -578,8 +597,12 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
         <div class="info"><div class="nm">Breadboard + jumper wire kit</div><div class="ds">Full and half-size boards, M-M, M-F and F-F wires</div></div>
         <div class="buys"><a class="buy" href="https://www.amazon.com/dp/B09VKYLYN7" target="_blank" rel="noopener">Amazon ↗</a></div>
       </div>
+      <div class="part-item">
+        <span class="qty">1×</span>
+        <div class="info"><div class="nm">HW-131 breadboard power module</div><div class="ds">Dedicated 5 V rail for the PMS5003, MQ-135 heater and DHT22</div></div>
+      </div>
     </div>
-    <p class="demo-note">Optional: an HW-131 breadboard power supply. These are the exact parts used in this build, but any equivalent module works.</p>
+    <p class="demo-note">These are the exact parts used in this build, but any equivalent module works.</p>
   </div>
 </section>
 
@@ -658,6 +681,12 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
           <text class="wirelbl" x="292" y="240" text-anchor="middle" fill="var(--c-press)">SDA</text>
           <text class="wirelbl" x="292" y="280" text-anchor="middle" fill="var(--c-press)">SCL</text>
 
+          <!-- HW-131 power module -->
+          <rect class="box" x="40" y="360" width="200" height="80" rx="14" style="stroke: var(--wire-5v)"/>
+          <text class="title" x="60" y="390">HW-131</text>
+          <text class="sub" x="60" y="408">Dedicated 5V rail</text>
+          <text class="pwr" x="60" y="426">GND tied to ESP32 GND</text>
+
           <!-- PMS5003 -->
           <rect class="box" x="660" y="60" width="200" height="140" rx="14"/>
           <text class="title" x="840" y="90" text-anchor="end">PMS5003</text>
@@ -685,7 +714,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
         <span><i style="background:var(--c-pm25)"></i>UART (TX↔RX crossed)</span>
         <span><i style="background:var(--c-gas)"></i>Analog</span>
         <span><i style="background:var(--wire-3v3)"></i>3V3 pin: BMP280</span>
-        <span><i style="background:var(--wire-5v)"></i>5V rail: DHT22, MQ-135, PMS5003</span>
+        <span><i style="background:var(--wire-5v)"></i>HW-131 5V rail: DHT22, MQ-135, PMS5003</span>
       </div>
       <div class="table-wrap">
         <table>
@@ -704,7 +733,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
     </div>
     <div class="callout">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg>
-      <div><b>Power rails.</b> Connect the ESP32-S3 <b>5V</b> pin to the breadboard's + rail and <b>GND</b> to the − rail. DHT22, MQ-135 and PMS5003 take power from those rails, and the BMP280 uses the board's <b>3V3</b> pin. If you add an HW-131 breadboard power supply, connect its GND to the ESP32-S3 GND.</div>
+      <div><b>Power rails.</b> The <b>HW-131</b> module feeds a dedicated <b>5V rail</b> for the high-draw parts: the PMS5003 fan and laser, the MQ-135 heater and the DHT22. The ESP32-S3 runs from USB-C, and the BMP280 uses the board's <b>3V3</b> pin. Connect the HW-131 GND to the ESP32-S3 GND, and don't also connect the board's 5V pin to the rail, so the two supplies never fight.</div>
     </div>
     <div class="callout">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01"/></svg>
@@ -718,7 +747,7 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
     <div class="section-head">
       <p class="eyebrow">Live demo</p>
       <h2>The dashboard, simulated</h2>
-      <p class="lead">This is what you see at the board's IP address. The values below are sample data that updates every 2 seconds, so no device is needed.</p>
+      <p class="lead">This is what you see at the board's IP address. Sample data streams in every second, so no device is needed. Tap a card to chart it, or simulate a dust spike or a Wi-Fi drop.</p>
     </div>
 
     <div class="demo-frame">
@@ -730,17 +759,28 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
         <div class="dash">
           <div class="dash-head">
             <h3>Live IoT Weather Station</h3>
-            <span class="dash-status"><span class="live-dot"></span><span id="ago">Updated just now</span></span>
+            <span class="conn-pill live" id="connPill"><span class="cdot"></span><span id="connText">Live</span></span>
           </div>
           <div class="banner" id="banner" role="status">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01"/></svg>
             <span id="bannerText"></span>
           </div>
           <div class="cards" id="cards"></div>
+          <div class="chart-panel">
+            <div class="chart-head"><b id="chartTitle"></b><span>last 2 minutes</span></div>
+            <div class="chart-box">
+              <svg viewBox="0 0 600 180" preserveAspectRatio="none"><path id="chartArea" fill-opacity=".14"/><path id="chartLine" fill="none" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>
+              <span class="axis top" id="chartMax"></span><span class="axis bot" id="chartMin"></span>
+            </div>
+          </div>
           <div class="dash-actions">
             <button class="btn btn-sm" id="spikeBtn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
               Simulate a dust spike
+            </button>
+            <button class="btn btn-sm" id="dropBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.1-1.5M2 8.8a15 15 0 0 1 4.2-2.7M22 8.8A15 15 0 0 0 10.7 5M12 20h.01"/></svg>
+              Simulate a Wi-Fi drop
             </button>
             <button class="btn btn-sm" id="pauseBtn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>
@@ -749,13 +789,13 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
           </div>
         </div>
         <aside class="json-pane">
-          <div class="h"><b><span class="method">GET</span>/data</b><span class="dash-status">200 OK</span></div>
+          <div class="h"><b><span class="method">WS</span>/ws</b><span class="dash-status" id="frameCount">frame #0</span></div>
           <pre id="json"></pre>
-          <div class="foot">application/json · polled every 2000 ms</div>
+          <div class="foot">text frame · pushed every 1000 ms · same JSON at GET /data</div>
         </aside>
       </div>
     </div>
-    <p class="demo-note">Alert thresholds match the firmware: PM2.5 &gt; 65, PM10 &gt; 150, Rs/Ro &lt; 0.60, temperature outside 0–45 °C, humidity outside 20–85 %.</p>
+    <p class="demo-note">Alert thresholds match the firmware dashboard: PM2.5 &gt; 65, PM10 &gt; 150, air quality &gt; 1600 ppm, temperature outside 0–45 °C, humidity outside 20–85 %.</p>
   </div>
 </section>
 
@@ -764,26 +804,26 @@ footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wr
     <div class="section-head">
       <p class="eyebrow">Build log</p>
       <h2>What went wrong, and how we fixed it</h2>
-      <p class="lead">Three problems came up during the build. If you hit one of them, here's the fix.</p>
+      <p class="lead">Three problems came up during the build, and the hardware and firmware are designed so they don't come back.</p>
     </div>
     <div class="lessons">
       <article class="lesson">
         <span class="no">Problem 1</span>
-        <h3>Erratic MQ-135 readings</h3>
-        <p>The air-quality values jumped around wildly and never settled.</p>
-        <div class="fix"><b>Fix</b>The heater was powered from 3.3 V. Moving it to the 5 V rail let the sensing layer reach its working temperature, and the readings settled right away.</div>
+        <h3>Unstable MQ-135 readings</h3>
+        <p>The heater didn't get a steady 5 V while sharing the microcontroller's rails, so the readings drifted and jumped.</p>
+        <div class="fix"><b>Fix</b>The heater now runs from the dedicated 5 V rail and reaches its working temperature, while the analog output stays within the 3.3 V ADC's safe range.</div>
       </article>
       <article class="lesson">
         <span class="no">Problem 2</span>
-        <h3>PMS5003 wouldn't turn on</h3>
-        <p>The dust sensor stayed silent: no fan, no data.</p>
-        <div class="fix"><b>Fix</b>The first dev board's 5V pin had failed. A replacement board restored power to the fan and laser. Measure the 5V pin with a multimeter before you blame the sensor.</div>
+        <h3>PMS5003 brownouts</h3>
+        <p>The fan and laser draw current spikes that sagged the board's 5 V and reset things. On one board the 5V pin failed outright.</p>
+        <div class="fix"><b>Fix</b>An HW-131 power module now gives the sensors their own sturdy 5 V rail, with its ground tied to the ESP32-S3.</div>
       </article>
       <article class="lesson">
         <span class="no">Problem 3</span>
-        <h3>Dashboard dropping values</h3>
-        <p>The page sometimes froze or showed missing dust readings.</p>
-        <div class="fix"><b>Fix</b>Reading the PMS5003 data was getting in the way of answering web requests. Now <code>loop()</code> handles web clients and reads the sensor data in turns, keeping the last valid reading, so <code>/data</code> always answers straight away.</div>
+        <h3>Dashboard data drops</h3>
+        <p><code>delay()</code> calls and blocking serial reads stalled the loop, so sensor frames and web updates were lost.</p>
+        <div class="fix"><b>Fix</b>The firmware was rebuilt around a non-blocking loop: <code>millis()</code> timers, a byte-by-byte PMS5003 parser and an async WebSocket that pushes compact JSON every second.</div>
       </article>
     </div>
   </div>
@@ -806,7 +846,8 @@ cd esp32-s3-weather-station/firmware/weather_station</pre></div>
         <h3>Install the board package and libraries</h3>
         <p>Add the Espressif boards URL in Preferences and install <b>esp32 by Espressif Systems</b>. Then install these libraries:</p>
         <div class="code"><button class="copy">Copy</button><pre>arduino-cli core install esp32:esp32
-arduino-cli lib install "DHT sensor library" "Adafruit Unified Sensor" \
+arduino-cli lib install "ESP Async WebServer" "Async TCP" \
+  "DHT sensor library" "Adafruit Unified Sensor" \
   "Adafruit BMP280 Library" "Adafruit BusIO" "Adafruit NeoPixel"</pre></div>
       </div></div>
       <div class="step"><div>
@@ -823,12 +864,12 @@ arduino-cli upload  --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc -p COM5 .</pre></di
       </div></div>
       <div class="step"><div>
         <h3>Open the dashboard</h3>
-        <p>Open the Serial Monitor at 115200 baud, press RST and copy the IP address it prints. Open it in any browser on the same network.</p>
+        <p>Open the Serial Monitor at 115200 baud and press RST. Then open the printed IP address, or <b>http://weather.local</b>, in any browser on the same network.</p>
         <div class="code"><button class="copy">Copy</button><pre><span class="c"># Serial Monitor output</span>
-Connected! IP Address: http://192.168.1.42
+Connected! IP Address: http://192.168.1.42  (or http://weather.local)
 
 <span class="c"># Raw readings</span>
-curl http://192.168.1.42/data</pre></div>
+curl http://weather.local/data</pre></div>
       </div></div>
     </div>
 
@@ -837,17 +878,17 @@ curl http://192.168.1.42/data</pre></div>
         <summary>PM2.5 and PM10 always read 0</summary>
         <ol>
           <li><b>Crossover:</b> connect the sensor's TX to GPIO15 (RX) and its RX to GPIO7 (TX), not TX to TX.</li>
-          <li><b>5 V power:</b> the PMS5003 fan needs 5 V, so check that you can hear it spin.</li>
+          <li><b>5 V power:</b> the PMS5003 fan needs 5 V from the HW-131 rail, so check that you can hear it spin.</li>
           <li><b>9600 baud</b> 8N1. This matches <code>Serial1.begin(9600, …)</code>.</li>
           <li><b>SET pin:</b> if SET is pulled LOW, the sensor sleeps. Leave it floating or HIGH.</li>
         </ol>
       </details>
       <details>
-        <summary>Pressure stuck at 728 hPa</summary>
+        <summary>A card shows "--" or the status says Offline</summary>
         <ul>
-          <li>728 is the firmware's fallback value, which means the BMP280 isn't responding.</li>
-          <li>Check SDA → GPIO8, SCL → GPIO9 and 3V3 power.</li>
-          <li>A board with chip ID 0x60 is a BME280. Use the BME280 library for it.</li>
+          <li><b>"--"</b> means that sensor isn't answering. The firmware sends <code>null</code> instead of a fake value, and the BMP280 is re-detected every 10 s.</li>
+          <li><b>Offline / Reconnecting</b> means the browser lost the WebSocket. It retries by itself, so check that the board is still on Wi-Fi.</li>
+          <li>The Serial Monitor prints a status line every 5 s with every reading and the PMS5003 frame counts.</li>
         </ul>
       </details>
     </div>
@@ -894,58 +935,79 @@ curl http://192.168.1.42/data</pre></div>
     });
   });
 
-  // ---------- simulated sensor data ----------
-  var HIST = 30;
-  var state = { tempC: 27.4, humidity: 58.2, pressure: 1008.6, ratio: 1.12, pm25: 18, pm10: 27 };
-  var spike = 0;
+  // ---------- simulated WebSocket stream ----------
+  var HIST = 120;
+  var state = { tempC: 27.4, humidity: 58.2, pressure: 1008.6, ratio: 1.1, pm1: 11, pm25: 18, pm10: 27, rssi: -58 };
+  var spike = 0, uptime = 3600, frameNo = 0;
   function drift(v, target, step, min, max) {
     v += (target - v) * 0.08 + (Math.random() - 0.5) * step;
     return Math.min(max, Math.max(min, v));
   }
   function tick() {
+    uptime++;
     state.tempC = drift(state.tempC, 27.2, 0.35, -10, 60);
     state.humidity = drift(state.humidity, 57, 1.2, 0, 100);
     state.pressure = drift(state.pressure, 1008.8, 0.25, 900, 1100);
+    state.rssi = Math.round(drift(state.rssi, -58, 2, -90, -30));
     if (spike > 0) {
       spike--;
-      state.pm25 = drift(state.pm25, 96, 6, 0, 500);
-      state.pm10 = drift(state.pm10, 172, 9, 0, 500);
-      state.ratio = drift(state.ratio, 0.48, 0.03, 0.1, 3);
-      state.pm25 += (96 - state.pm25) * 0.35;
-      state.pm10 += (172 - state.pm10) * 0.35;
+      state.pm1 += (60 - state.pm1) * 0.4;
+      state.pm25 += (96 - state.pm25) * 0.4;
+      state.pm10 += (172 - state.pm10) * 0.4;
+      state.ratio += (0.48 - state.ratio) * 0.4;
     } else {
+      state.pm1 = drift(state.pm1, 11, 1.5, 0, 500);
       state.pm25 = drift(state.pm25, 17, 2.2, 0, 500);
       state.pm10 = drift(state.pm10, 26, 3, 0, 500);
       state.ratio = drift(state.ratio, 1.1, 0.03, 0.1, 3);
     }
-    // PMS5003 reports whole µg/m³ values
-    state.pm25 = Math.round(state.pm25);
-    state.pm10 = Math.round(state.pm10);
+  }
+  // Same shape as the firmware's WebSocket frame
+  function frame() {
+    return {
+      tempC: +state.tempC.toFixed(2), tempF: +(state.tempC * 1.8 + 32).toFixed(2),
+      humidity: +state.humidity.toFixed(2), pressure: +state.pressure.toFixed(2),
+      ratio: +state.ratio.toFixed(3), ppm: Math.round(420 * Math.pow(state.ratio, -2.769)),
+      pm1: Math.round(state.pm1), pm25: Math.round(state.pm25), pm10: Math.round(state.pm10),
+      uptime: uptime, rssi: state.rssi, clients: 1
+    };
+  }
+  function aqi(v) {
+    return v <= 9 ? 'AQI: Good' : v <= 35.4 ? 'AQI: Moderate' : v <= 55.4 ? 'AQI: Sensitive groups' : v <= 125.4 ? 'AQI: Unhealthy' : 'AQI: Very unhealthy';
+  }
+  function fmtUptime(s) {
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+    return 'up ' + h + 'h ' + String(m).padStart(2, '0') + 'm';
   }
 
+  var unit = '<small>µg/m³</small>';
   var cards = [
-    { id: 'temp',  label: 'Temperature',         color: '--c-temp',  fmt: function (d) { return d.tempC.toFixed(1) + '<small>°C</small>'; }, sub: function (d) { return (d.tempC * 9 / 5 + 32).toFixed(1) + ' °F'; }, key: 'tempC', alert: function (d) { return d.tempC > 45 || d.tempC < 0; } },
-    { id: 'hum',   label: 'Humidity',            color: '--c-hum',   fmt: function (d) { return d.humidity.toFixed(1) + '<small>%</small>'; }, sub: function () { return 'relative'; }, key: 'humidity', alert: function (d) { return d.humidity > 85 || d.humidity < 20; } },
-    { id: 'press', label: 'Pressure',            color: '--c-press', fmt: function (d) { return d.pressure.toFixed(1) + '<small>hPa</small>'; }, sub: function () { return 'BMP280'; }, key: 'pressure', alert: function (d) { return d.pressure < 550 || d.pressure > 1400; } },
-    { id: 'gas',   label: 'Air quality (Rs/Ro)', color: '--c-gas',   fmt: function (d) { return d.ratio.toFixed(2) + '<small>ratio</small>'; }, sub: function (d) { return d.ratio >= 0.9 ? 'clean' : d.ratio >= 0.6 ? 'moderate' : 'poor'; }, key: 'ratio', alert: function (d) { return d.ratio < 0.60; } },
-    { id: 'pm25',  label: 'PM2.5 dust',          color: '--c-pm25',  fmt: function (d) { return d.pm25.toFixed(1) + '<small>µg/m³</small>'; }, sub: function () { return 'fine particles'; }, key: 'pm25', alert: function (d) { return d.pm25 > 65; } },
-    { id: 'pm10',  label: 'PM10 dust',           color: '--c-pm10',  fmt: function (d) { return d.pm10.toFixed(1) + '<small>µg/m³</small>'; }, sub: function () { return 'coarse particles'; }, key: 'pm10', alert: function (d) { return d.pm10 > 150; } }
+    { key: 'tempC',    label: 'Temperature', color: '--c-temp',  d: 1, u: '<small>°C</small>',  sub: function (f) { return f.tempF.toFixed(1) + ' °F'; }, alert: function (v) { return v > 45 || v < 0; } },
+    { key: 'humidity', label: 'Humidity',    color: '--c-hum',   d: 1, u: '<small>%</small>',   sub: function () { return 'relative'; }, alert: function (v) { return v > 85 || v < 20; } },
+    { key: 'pressure', label: 'Pressure',    color: '--c-press', d: 1, u: '<small>hPa</small>', sub: function () { return 'barometric'; }, alert: function (v) { return v < 550 || v > 1400; } },
+    { key: 'ppm',      label: 'Air quality', color: '--c-gas',   d: 0, u: '<small>ppm</small>', sub: function (f) { return 'CO₂-eq · Rs/Ro ' + f.ratio.toFixed(2); }, alert: function (v) { return v > 1600; } },
+    { key: 'pm1',      label: 'PM1.0',       color: '--c-led',   d: 0, u: unit, sub: function () { return 'ultrafine'; }, alert: function () { return false; } },
+    { key: 'pm25',     label: 'PM2.5',       color: '--c-pm25',  d: 0, u: unit, sub: function (f) { return aqi(f.pm25); }, alert: function (v) { return v > 65; } },
+    { key: 'pm10',     label: 'PM10',        color: '--c-pm10',  d: 0, u: unit, sub: function () { return 'coarse dust'; }, alert: function (v) { return v > 150; } },
+    { key: 'rssi',     label: 'Wi-Fi signal', color: '--accent', d: 0, u: '<small>dBm</small>', sub: function (f) { return fmtUptime(f.uptime); }, alert: function () { return false; } }
   ];
-  var alertNames = { temp: 'Temperature', hum: 'Humidity', press: 'Pressure', gas: 'Air Quality', pm25: 'PM2.5', pm10: 'PM10' };
 
-  // seed history so sparklines aren't empty on load
-  var hist = {};
+  var hist = {}, last = frame(), sel = 0;
   cards.forEach(function (c) { hist[c.key] = []; });
-  for (var i = 0; i < HIST; i++) { tick(); cards.forEach(function (c) { hist[c.key].push(state[c.key]); }); }
+  for (var i = 0; i < HIST; i++) { tick(); last = frame(); cards.forEach(function (c) { hist[c.key].push(last[c.key]); }); }
 
   var cardsEl = document.getElementById('cards');
-  cards.forEach(function (c) {
+  cards.forEach(function (c, idx) {
     var el = document.createElement('div');
-    el.className = 'card';
-    el.id = c.id + '-card';
+    el.className = 'card' + (idx === 0 ? ' sel' : '');
     el.style.setProperty('--c', 'var(' + c.color + ')');
     el.innerHTML = '<div class="lbl">' + c.label + '<em>alert</em></div><div class="val"></div><div class="sub2"></div>' +
       '<svg class="spark" viewBox="0 0 100 36" preserveAspectRatio="none"><path class="area" fill="var(' + c.color + ')" fill-opacity=".12"/><path class="line" fill="none" stroke="var(' + c.color + ')" stroke-width="1.6" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg>';
+    el.addEventListener('click', function () {
+      sel = idx;
+      cards.forEach(function (o, j) { o.el.classList.toggle('sel', j === idx); });
+      drawChart();
+    });
     cardsEl.appendChild(el);
     c.el = el;
   });
@@ -957,24 +1019,33 @@ curl http://192.168.1.42/data</pre></div>
       return [(i / (arr.length - 1)) * w, pad + (1 - (v - min) / (max - min)) * (h - pad * 2)];
     });
     var line = 'M' + pts.map(function (p) { return p[0].toFixed(2) + ' ' + p[1].toFixed(2); }).join(' L');
-    return { line: line, area: line + ' L' + w + ' ' + h + ' L0 ' + h + ' Z' };
+    return { line: line, area: line + ' L' + w + ' ' + h + ' L0 ' + h + ' Z', min: min, max: max };
+  }
+
+  function drawChart() {
+    var c = cards[sel], p = sparkPath(hist[c.key], 600, 180, 10);
+    document.getElementById('chartTitle').textContent = c.label;
+    var line = document.getElementById('chartLine'), area = document.getElementById('chartArea');
+    line.setAttribute('stroke', 'var(' + c.color + ')');
+    area.setAttribute('fill', 'var(' + c.color + ')');
+    line.setAttribute('d', p.line);
+    area.setAttribute('d', p.area);
+    document.getElementById('chartMax').textContent = p.max.toFixed(c.d);
+    document.getElementById('chartMin').textContent = p.min.toFixed(c.d);
   }
 
   var jsonEl = document.getElementById('json');
+  var frameEl = document.getElementById('frameCount');
   var prevJson = {};
-  function renderJson(d) {
-    var data = {
-      tempC: d.tempC, tempF: d.tempC * 9 / 5 + 32, humidity: d.humidity,
-      pressure: d.pressure, ratio: d.ratio, pm25: d.pm25, pm10: d.pm10
-    };
-    var keys = Object.keys(data);
-    var html = '{\n' + keys.map(function (k, i) {
-      var v = data[k].toFixed(2);
+  function renderJson(f) {
+    var keys = Object.keys(f);
+    jsonEl.innerHTML = '{\n' + keys.map(function (k, i) {
+      var v = String(f[k]);
       var changed = prevJson[k] !== undefined && prevJson[k] !== v;
       prevJson[k] = v;
       return '  <span class="k">"' + k + '"</span>: <span class="n' + (changed ? ' flash' : '') + '">' + v + '</span>' + (i < keys.length - 1 ? ',' : '');
     }).join('\n') + '\n}';
-    jsonEl.innerHTML = html;
+    frameEl.textContent = 'frame #' + frameNo;
   }
 
   var banner = document.getElementById('banner');
@@ -982,22 +1053,24 @@ curl http://192.168.1.42/data</pre></div>
   function render() {
     var alerts = [];
     cards.forEach(function (c) {
-      c.el.querySelector('.val').innerHTML = c.fmt(state);
-      c.el.querySelector('.sub2').textContent = c.sub(state);
-      var p = sparkPath(hist[c.key], 100, 36, 3);
+      var v = last[c.key];
+      c.el.querySelector('.val').innerHTML = v.toFixed(c.d) + c.u;
+      c.el.querySelector('.sub2').textContent = c.sub(last);
+      var p = sparkPath(hist[c.key].slice(-40), 100, 36, 3);
       c.el.querySelector('.line').setAttribute('d', p.line);
       c.el.querySelector('.area').setAttribute('d', p.area);
-      var bad = c.alert(state);
+      var bad = c.alert(v);
       c.el.classList.toggle('alert', bad);
-      if (bad) alerts.push(alertNames[c.id]);
+      if (bad) alerts.push(c.label);
     });
     if (alerts.length) {
       banner.classList.add('show');
-      bannerText.textContent = 'WARNING: Abnormal readings in: ' + alerts.join(', ');
+      bannerText.textContent = 'Abnormal readings: ' + alerts.join(', ');
     } else {
       banner.classList.remove('show');
     }
-    renderJson(state);
+    renderJson(last);
+    drawChart();
     renderHero();
   }
 
@@ -1009,11 +1082,11 @@ curl http://192.168.1.42/data</pre></div>
     '<defs><linearGradient id="hg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--c-temp)" stop-opacity=".35"/><stop offset="1" stop-color="var(--c-temp)" stop-opacity="0"/></linearGradient></defs>' +
     '<path id="hArea" fill="url(#hg)"/><path id="hLine" fill="none" stroke="var(--c-temp)" stroke-width="2.2" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>';
   function renderHero() {
-    heroTemp.textContent = state.tempC.toFixed(1);
-    heroHum.textContent = Math.round(state.humidity) + '%';
-    heroPm.textContent = state.pm25;
-    heroPress.textContent = Math.round(state.pressure);
-    var p = sparkPath(hist.tempC, 300, 70, 6);
+    heroTemp.textContent = last.tempC.toFixed(1);
+    heroHum.textContent = Math.round(last.humidity) + '%';
+    heroPm.textContent = last.pm25;
+    heroPress.textContent = Math.round(last.pressure);
+    var p = sparkPath(hist.tempC.slice(-40), 300, 70, 6);
     document.getElementById('hLine').setAttribute('d', p.line);
     document.getElementById('hArea').setAttribute('d', p.area);
   }
@@ -1022,31 +1095,57 @@ curl http://192.168.1.42/data</pre></div>
     heroClock.textContent = [d.getHours(), d.getMinutes(), d.getSeconds()].map(function (n) { return String(n).padStart(2, '0'); }).join(':');
   }
 
-  // ---------- loop ----------
-  var paused = false, last = Date.now();
-  var agoEl = document.getElementById('ago');
+  // ---------- connection: ping, drop and backoff reconnect ----------
+  var connPill = document.getElementById('connPill'), connText = document.getElementById('connText');
+  var paused = false, rtt = 24, dropAt = 0, lastFrame = Date.now();
+  var RETRIES = [1000, 3000, 7000];   // 1 s, 2 s, 4 s backoff; the third attempt succeeds
+  function linkDown() { return dropAt && Date.now() - dropAt < RETRIES[RETRIES.length - 1]; }
+  function renderConn() {
+    var now = Date.now();
+    if (paused) {
+      connPill.className = 'conn-pill';
+      connText.textContent = 'Paused';
+    } else if (linkDown()) {
+      var t = now - dropAt, n = 0;
+      while (n < RETRIES.length && RETRIES[n] <= t) n++;
+      var wait = Math.ceil((RETRIES[n] - t) / 1000);
+      connPill.className = 'conn-pill' + (n >= 2 ? ' offline' : ' retry');
+      connText.textContent = (n >= 2 ? 'Offline' : 'Reconnecting') + ' · retry in ' + wait + 's';
+    } else {
+      connPill.className = 'conn-pill live';
+      var age = Math.round((now - lastFrame) / 1000);
+      connText.textContent = 'Live · ' + rtt + ' ms' + (age > 1 ? ' · ' + age + 's ago' : '');
+    }
+  }
+
   function step() {
     tick();
-    cards.forEach(function (c) { hist[c.key].push(state[c.key]); if (hist[c.key].length > HIST) hist[c.key].shift(); });
-    last = Date.now();
+    frameNo++;
+    last = frame();
+    lastFrame = Date.now();
+    cards.forEach(function (c) { hist[c.key].push(last[c.key]); if (hist[c.key].length > HIST) hist[c.key].shift(); });
     render();
   }
   render();
   clock();
-  setInterval(function () { if (!paused) step(); }, 2000);
-  setInterval(function () {
-    clock();
-    var s = Math.round((Date.now() - last) / 1000);
-    agoEl.textContent = paused ? 'Paused' : (s < 1 ? 'Updated just now' : 'Updated ' + s + 's ago');
-  }, 500);
+  setInterval(function () { if (!paused && !linkDown()) step(); }, 1000);
+  setInterval(function () { rtt = 15 + Math.round(Math.random() * 20); }, 5000);
+  setInterval(function () { clock(); renderConn(); }, 250);
 
-  document.getElementById('spikeBtn').addEventListener('click', function () {
-    spike = 5;
-    if (paused) { paused = false; pauseLabel.textContent = 'Pause'; }
-    step();
-  });
   var pauseBtn = document.getElementById('pauseBtn');
   var pauseLabel = pauseBtn.querySelector('span');
+  document.getElementById('spikeBtn').addEventListener('click', function () {
+    spike = 6;
+    paused = false;
+    pauseLabel.textContent = 'Pause';
+    dropAt = 0;
+    step();
+  });
+  document.getElementById('dropBtn').addEventListener('click', function () {
+    paused = false;
+    pauseLabel.textContent = 'Pause';
+    dropAt = Date.now();
+  });
   pauseBtn.addEventListener('click', function () {
     paused = !paused;
     pauseLabel.textContent = paused ? 'Resume' : 'Pause';

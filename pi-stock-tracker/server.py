@@ -1,7 +1,8 @@
 """Pi Stock Tracker - a small web app that tracks every US stock.
 
 Run:  python server.py   then open http://<your-pi-ip>:8000
-Needs only the `requests` package (pip install requests).
+Needs: pip install requests websocket-client
+Live prices: put your free Finnhub API key in finnhub_key.txt next to this file.
 """
 import csv, io, json, os, re, threading, time
 from datetime import datetime
@@ -23,7 +24,12 @@ SYMBOL_LISTS = [
     ("https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt", "ACT Symbol"),
 ]
 CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}"
-INDICES = [("^GSPC", "S&P 500"), ("^IXIC", "Nasdaq"), ("^DJI", "Dow Jones"), ("^RUT", "Russell 2000")]
+# Index, display name, and the fund that tracks it (streamed live to estimate the index between updates)
+INDICES = [("^GSPC", "S&P 500", "SPY"), ("^NDX", "Nasdaq 100", "QQQ"),
+           ("^DJI", "Dow Jones", "DIA"), ("^RUT", "Russell 2000", "IWM")]
+FINNHUB_WS = "wss://ws.finnhub.io?token={}"
+LIVE_MAX = 50        # Finnhub's free plan streams up to 50 symbols at once
+LIVE_IDLE = 30       # stop streaming a stock 30 s after nobody is looking at it
 
 # Chart range buttons -> (Yahoo range, Yahoo interval)
 CHART_RANGES = {"1d": ("1d", "5m"), "5d": ("5d", "30m"), "1m": ("1mo", "1d"), "6m": ("6mo", "1d"),
@@ -31,7 +37,7 @@ CHART_RANGES = {"1d": ("1d", "5m"), "5d": ("5d", "30m"), "1m": ("1mo", "1d"), "6
 # Performance periods: trading days back from the latest close (ytd/1y handled specially)
 PERIOD_DAYS = {"1w": 5, "1m": 21, "6m": 126}
 
-SCREENER_REFRESH = 300        # all-stock prices every 5 minutes
+SCREENER_REFRESH = 60         # all-stock prices every minute
 HISTORY_MAX_AGE = 20 * 3600   # re-crawl a stock's history about once a day
 CRAWL_DELAY = 0.6             # pause between Yahoo requests in the background crawl
 CACHE_SECONDS = 300
@@ -40,7 +46,10 @@ stocks = {}      # symbol -> latest price info for every US stock
 history = {}     # symbol -> reference closes for 1W/1M/6M/YTD/1Y changes
 profiles = {}    # symbol -> company profile (CEO, employees, description...)
 cache = {}       # small in-memory cache for charts and index quotes
-status = {"updated": None, "source": None, "crawl_done": 0, "crawl_total": 0, "profiles_ok": True}
+status = {"updated": None, "updated_ts": 0, "source": None, "crawl_done": 0, "crawl_total": 0, "profiles_ok": True}
+live = {}        # Finnhub symbol -> {"p": last trade price, "t": trade time (epoch seconds)}
+live_wanted = {} # our symbol -> last time a browser asked for it
+live_state = {"enabled": False, "connected": False, "subscribed": set(), "error": None}
 lock = threading.Lock()
 
 
@@ -113,11 +122,13 @@ def load_screener():
         sym = (row.get("symbol") or "").strip().upper()
         if not sym:
             continue
+        price, net = num(row.get("lastsale")), num(row.get("netchange"))
         fresh[sym] = {
             "symbol": sym,
             "name": (row.get("name") or sym).strip(),
-            "price": num(row.get("lastsale")),
-            "netchange": num(row.get("netchange")),
+            "price": price,
+            "netchange": net,
+            "prev": round(price - net, 4) if price is not None and net is not None and price - net > 0 else None,
             "1d": num(row.get("pctchange")),
             "volume": num(row.get("volume")),
             "cap": num(row.get("marketCap")),
@@ -139,7 +150,7 @@ def load_symbol_lists():
             if not sym or sym.startswith("File Creation") or row.get("Test Issue") == "Y":
                 continue
             fresh[sym] = {"symbol": sym, "name": row["Security Name"], "price": None, "netchange": None,
-                          "1d": None, "volume": None, "cap": None, "sector": "Other", "industry": "",
+                          "prev": None, "1d": None, "volume": None, "cap": None, "sector": "Other", "industry": "",
                           "country": "", "ipo": ""}
     return fresh
 
@@ -161,6 +172,7 @@ def refresh_prices_forever():
                 stocks.clear()
                 stocks.update(fresh)
             status["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            status["updated_ts"] = time.time()
             status["source"] = source
             print(f"[{status['updated']}] Prices refreshed: {len(fresh)} stocks from {source}")
         time.sleep(SCREENER_REFRESH if source == "Nasdaq" else 60)
@@ -277,12 +289,122 @@ def crawl_forever():
         time.sleep(600)
 
 
+# ---------- live prices (Finnhub WebSocket) ----------
+
+def read_key():
+    key = os.environ.get("FINNHUB_KEY", "").strip()
+    if not key:
+        try:
+            with open(os.path.join(HERE, "finnhub_key.txt")) as f:
+                key = f.read().strip()
+        except OSError:
+            pass
+    return key
+
+
+def fh_symbol(sym):
+    """Nasdaq writes class shares as BRK/B, Finnhub as BRK.B"""
+    return sym.replace("/", ".").replace("-", ".")
+
+
+def live_targets():
+    """The (at most 50) symbols to stream: index funds first, then what browsers looked at most recently."""
+    now = time.time()
+    out = [etf for _, _, etf in INDICES]
+    for sym, _ in sorted(list(live_wanted.items()), key=lambda x: -x[1]):
+        if now - live_wanted.get(sym, 0) > LIVE_IDLE or len(out) >= LIVE_MAX:
+            break
+        f = fh_symbol(sym)
+        if f not in out and "^" not in f:
+            out.append(f)
+    for sym in [s for s, t in list(live_wanted.items()) if now - t > 600]:
+        live_wanted.pop(sym, None)
+    return set(out)
+
+
+def live_forever(key):
+    import websocket  # pip install websocket-client
+
+    def sync_subscriptions(ws):
+        while live_state["connected"]:
+            want, have = live_targets(), live_state["subscribed"]
+            try:
+                for s in want - have:
+                    ws.send(json.dumps({"type": "subscribe", "symbol": s}))
+                for s in have - want:
+                    ws.send(json.dumps({"type": "unsubscribe", "symbol": s}))
+            except Exception:
+                return
+            live_state["subscribed"] = want
+            time.sleep(1)
+
+    def on_open(ws):
+        live_state.update(connected=True, error=None, subscribed=set())
+        print("Live prices connected (Finnhub)")
+        threading.Thread(target=sync_subscriptions, args=(ws,), daemon=True).start()
+
+    def on_message(ws, message):
+        try:
+            msg = json.loads(message)
+        except ValueError:
+            return
+        if msg.get("type") == "trade":
+            for t in msg.get("data") or []:
+                live[t["s"]] = {"p": t["p"], "t": t["t"] / 1000}
+        elif msg.get("type") == "error":
+            live_state["error"] = msg.get("msg")
+            print("Finnhub error:", msg.get("msg"))
+
+    def on_error(ws, error):
+        text = str(error)
+        live_state["error"] = "Finnhub rejected the API key" if "401" in text else text
+
+    def on_close(ws, *args):
+        live_state["connected"] = False
+
+    wait = 5
+    while True:
+        started = time.time()
+        ws = websocket.WebSocketApp(FINNHUB_WS.format(key), on_open=on_open, on_message=on_message,
+                                    on_error=on_error, on_close=on_close)
+        try:
+            ws.run_forever(ping_interval=30, ping_timeout=10)
+        except Exception as e:
+            live_state["error"] = str(e)
+        live_state["connected"] = False
+        wait = 5 if time.time() - started > 120 else min(wait * 2, 120)
+        print(f"Live prices disconnected ({live_state['error'] or 'closed'}) - retrying in {wait}s")
+        time.sleep(wait)
+
+
+def start_live():
+    key = read_key()
+    if not key:
+        live_state["error"] = "No Finnhub key (add finnhub_key.txt for live prices)"
+        print(live_state["error"])
+        return
+    try:
+        import websocket  # noqa: F401
+    except ImportError:
+        live_state["error"] = "Run: pip install websocket-client"
+        print("Live prices off -", live_state["error"])
+        return
+    live_state["enabled"] = True
+    threading.Thread(target=live_forever, args=(key,), daemon=True).start()
+
+
 # ---------- API ----------
 
 def row_for(s):
     h = history.get(s["symbol"], {})
-    price = s["price"]
     out = dict(s)
+    tick = live.get(fh_symbol(s["symbol"]))
+    if tick and tick["t"] >= status["updated_ts"] - 120:   # a trade newer than the last full download
+        out["price"], out["live"] = tick["p"], True
+        if s.get("prev"):
+            out["netchange"] = round(tick["p"] - s["prev"], 4)
+            out["1d"] = pct(tick["p"], s["prev"])
+    price = out["price"]
     for k in ("1w", "1m", "6m", "ytd", "1y"):
         out[k] = pct(price, h.get(k))
     p = profiles.get(s["symbol"]) or {}
@@ -336,18 +458,52 @@ def api_sectors():
     return sorted(out, key=lambda x: -x["change"])
 
 
+def yahoo_today(sym):
+    """Previous close and latest price from Yahoo."""
+    meta, points = yahoo_chart(sym, "1d", "5m")
+    if not isinstance(meta, dict):
+        return None
+    prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+    price = meta.get("regularMarketPrice") or (points[-1][1] if points else None)
+    return {"prev": prev, "price": price} if prev and price else None
+
+
+def yahoo_spark(sym):
+    meta, points = yahoo_chart(sym, "1mo", "1d")
+    return [c for _, c in points] or None
+
+
 def api_market():
-    def one(sym, name):
-        def load():
-            meta, points = yahoo_chart(sym, "1mo", "1d")
-            if not points or meta == "rate-limited":
-                return None
-            closes = [c for _, c in points]
-            price = meta.get("regularMarketPrice") or closes[-1]
-            prev = closes[-2] if len(closes) > 1 else closes[-1]
-            return {"symbol": sym, "name": name, "price": price, "change": pct(price, prev), "spark": closes}
-        return cached("idx:" + sym, 120, load)
-    return [x for x in (one(s, n) for s, n in INDICES) if x]
+    out = []
+    for sym, name, etf in INDICES:
+        today = cached("today:" + sym, 30, lambda: yahoo_today(sym))
+        if not today:
+            continue
+        price, is_live = today["price"], False
+        # Between Yahoo updates, move the index by the same % as its live-streamed fund
+        etf_today = cached("today:" + etf, 600, lambda: yahoo_today(etf))
+        tick = live.get(etf)
+        if etf_today and tick and time.time() - tick["t"] < 300:
+            price, is_live = today["prev"] * tick["p"] / etf_today["prev"], True
+        out.append({"symbol": sym, "name": name, "price": price, "change": pct(price, today["prev"]),
+                    "live": is_live, "spark": cached("spark:" + sym, 600, lambda: yahoo_spark(sym)) or []})
+    return out
+
+
+def api_live(qs):
+    """Latest prices for the stocks a browser has on screen (first = most important)."""
+    syms = [s for s in qs.get("symbols", [""])[0].upper().split(",") if s][:200]
+    now = time.time()
+    with lock:
+        pool = [stocks[s] for s in syms if s in stocks]
+    for i, s in enumerate(p["symbol"] for p in pool):
+        live_wanted[s] = max(live_wanted.get(s, 0), now - i * 0.001)
+    quotes = {}
+    for s in pool:
+        r = row_for(s)
+        quotes[s["symbol"]] = {"p": r["price"], "c": r["1d"], "n": r["netchange"], "live": r.get("live", False)}
+    return {"connected": live_state["connected"], "enabled": live_state["enabled"],
+            "error": live_state["error"], "quotes": quotes}
 
 
 def api_search(q):
@@ -409,7 +565,9 @@ def api_chart(sym, rng):
 def api_status():
     with lock:
         n = len(stocks)
-    return dict(status, stocks=n, profiles=len(profiles))
+    return dict(status, stocks=n, profiles=len(profiles), live_enabled=live_state["enabled"],
+                live_connected=live_state["connected"], live_streaming=len(live_state["subscribed"]),
+                live_error=live_state["error"])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -432,6 +590,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(api_search(qs.get("q", [""])[0]))
             if url.path == "/api/status":
                 return self.send_json(api_status())
+            if url.path == "/api/live":
+                return self.send_json(api_live(qs))
             if url.path == "/api/quote":
                 data = api_quote(sym) if valid else None
                 return self.send_json(data or {"error": "Unknown stock"}, 200 if data else 404)
@@ -459,6 +619,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=refresh_prices_forever, daemon=True).start()
     threading.Thread(target=crawl_forever, daemon=True).start()
+    start_live()
     print(f"Website running! Open http://<your-pi-ip>:{PORT}  (Ctrl+C to stop)")
     print("Loading all US stocks... the first price download takes a few seconds.")
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

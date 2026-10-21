@@ -9,7 +9,7 @@ A small web app for a Raspberry Pi that tracks every US-listed stock (about 7,00
 - **Favorites:** tap ☆ on any stock. Favorites are saved in the browser on each device.
 - **Light and dark mode**, and the layout works on phones.
 
-Prices come from Nasdaq's public stock screener and refresh every 5 minutes. Charts, history and company profiles come from Yahoo Finance. After the first start, the Pi spends a couple of hours slowly downloading one year of history for every stock, biggest companies first. Until then, the week, month and year columns fill in gradually. The history is saved in `history.json` and `profiles.json`, so restarting doesn't lose it.
+Prices come from Nasdaq's public stock screener and refresh every minute. Charts, history and company profiles come from Yahoo Finance. After the first start, the Pi spends a couple of hours slowly downloading one year of history for every stock, biggest companies first. Until then, the week, month and year columns fill in gradually. The history is saved in `history.json` and `profiles.json`, so restarting doesn't lose it.
 
 The data is for personal use only, and nothing here is investment advice.
 
@@ -17,7 +17,7 @@ The data is for personal use only, and nothing here is investment advice.
 
 ```bash
 mkdir -p ~/stocktracker && cd ~/stocktracker
-python3 -m venv venv && source venv/bin/activate && pip install requests
+python3 -m venv venv && source venv/bin/activate && pip install requests websocket-client
 BASE=https://raw.githubusercontent.com/akshajtripathi24-ui/esp32-s3-weather-station/claude/raspberry-pi-projects-no-hardware-rc5gau/pi-stock-tracker
 curl -fsSL -O "$BASE/server.py" -O "$BASE/index.html" -O "$BASE/setup-autostart.sh"
 python server.py
@@ -27,4 +27,6 @@ Then open `http://<your-pi-ip>:8000`. To find the IP address, run `hostname -I`.
 
 To keep it running all the time and start it on boot, run `bash setup-autostart.sh`.
 
-It runs on Python 3.9 and newer, and only needs the `requests` package.
+For live prices, get a free API key at finnhub.io and save it in `finnhub_key.txt` next to `server.py`. The free key streams up to 50 stocks at once: the one you are viewing, what is on screen, and your favorites. Everything else updates every minute.
+
+It runs on Python 3.9 and newer, and needs the `requests` and `websocket-client` packages.

@@ -127,6 +127,14 @@
   .about p { margin:8px 0 0; color:var(--muted); }
   .empty { padding:24px; text-align:center; color:var(--muted); }
   .skeleton { color:var(--muted); padding:12px 0; }
+  .badge { font-size:12px; font-weight:600; padding:3px 8px; border-radius:999px; background:var(--hover); color:var(--muted); white-space:nowrap; }
+  .badge.on { background:var(--up-bg); color:var(--up); }
+  .badge.on::first-letter { animation:pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity:.3; } }
+  .flash-up { animation:flashUp 1s ease-out; } .flash-down { animation:flashDown 1s ease-out; }
+  @keyframes flashUp { from { background:var(--up-bg); color:var(--up); } }
+  @keyframes flashDown { from { background:var(--down-bg); color:var(--down); } }
+  .liveDot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--up); margin-left:6px; vertical-align:middle; animation:pulse 1.6s infinite; }
   footer { max-width:1180px; margin:0 auto; padding:8px 16px 32px; color:var(--muted); font-size:12px; }
 </style>
 </head>
@@ -143,6 +151,7 @@
       <input id="search" placeholder="Search stocks, tickers or CEOs…" autocomplete="off">
       <div id="results"></div>
     </div>
+    <span class="badge" id="liveBadge" title="">● …</span>
     <button class="iconBtn" id="themeBtn" title="Toggle light/dark">◐</button>
   </div>
 </header>
@@ -164,6 +173,9 @@ const cls = n => n == null ? "muted" : n >= 0 ? "up" : "down";
 const pctTxt = n => n == null ? "–" : (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
 const pill = n => `<span class="pill ${cls(n)}">${pctTxt(n)}</span>`;
 const pctSpan = n => `<span class="${cls(n)}">${pctTxt(n)}</span>`;
+const livePill = r => `<span class="pill ${cls(r["1d"])}" data-lc="${esc(r.symbol)}" data-base="pill">${pctTxt(r["1d"])}</span>`;
+const liveSpan = r => `<span class="${cls(r["1d"])}" data-lc="${esc(r.symbol)}" data-base="">${pctTxt(r["1d"])}</span>`;
+const todayTxt = (n, c) => c == null ? "" : `${n != null ? (n >= 0 ? "+" : "") + n.toFixed(2) + " " : ""}(${pctTxt(c)}) today`;
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -256,8 +268,8 @@ function tableHTML(rows, sort, order) {
     <tbody>${rows.map(r => `<tr data-go="${esc(r.symbol)}">
       <td>${starBtn(r.symbol)}</td>
       <td><b>${esc(r.symbol)}</b><span class="nm">${esc(r.name)}</span></td>
-      <td>${money(r.price)}</td>
-      ${["1d","1w","1m","6m","ytd","1y"].map(k => `<td>${pctSpan(r[k])}</td>`).join("")}
+      <td data-lp="${esc(r.symbol)}">${money(r.price)}</td>
+      <td>${liveSpan(r)}</td>${["1w","1m","6m","ytd","1y"].map(k => `<td>${pctSpan(r[k])}</td>`).join("")}
       <td>${big(r.cap)}</td><td>${big(r.volume)}</td><td class="muted">${esc(r.sector)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
@@ -276,7 +288,7 @@ function sparkSVG(values, color) {
 
 const listHTML = (rows, key) => rows.length ? rows.map(r => `
   <div class="item" data-go="${esc(r.symbol)}"><span class="sym">${esc(r.symbol)}</span><span class="nm">${esc(r.name)}</span>
-  <span class="px">${money(r.price)}</span>${pill(r[key])}</div>`).join("") : '<div class="skeleton">Waiting for data… (week/month/year numbers fill in as the Pi downloads price history)</div>';
+  <span class="px" data-lp="${esc(r.symbol)}">${money(r.price)}</span>${key === "1d" ? livePill(r) : pill(r[key])}</div>`).join("") : '<div class="skeleton">Waiting for data… (week/month/year numbers fill in as the Pi downloads price history)</div>';
 
 async function renderMarket() {
   view.innerHTML = `
@@ -311,9 +323,7 @@ async function fillMarket() {
     api("/api/screener?sort=volume&order=desc&mincap=300000000&limit=10"), api("/api/sectors")]);
   if (!$("#indices")) return;  // user navigated away
   const v = r => r.status === "fulfilled" ? r.value : null;
-  $("#indices").innerHTML = (v(idx) || []).map(i => `
-    <div class="card idx"><div class="nm">${esc(i.name)}</div><div class="px">${i.price.toLocaleString(undefined, {maximumFractionDigits: 2})}</div>
-    ${pctSpan(i.change)}${sparkSVG(i.spark, cssVar(i.change >= 0 ? "--up" : "--down"))}</div>`).join("") || '<div class="card muted">Index data unavailable right now.</div>';
+  drawIndices(v(idx));
   const nonNull = rows => (rows || []).filter(r => r[p] != null);
   $("#gainers").innerHTML = listHTML(nonNull(v(gain)?.rows).filter(r => r[p] >= 0), p);
   $("#losers").innerHTML = listHTML(nonNull(v(lose)?.rows).filter(r => r[p] < 0), p);
@@ -330,6 +340,23 @@ async function fillMarket() {
     Object.assign(screenState, {sector: el.dataset.sector, sort: "1d", order: "desc", offset: 0});
     store.set("screener", screenState); location.hash = "#screener";
   });
+}
+
+let lastIdx = {};
+function drawIndices(list) {
+  if (!$("#indices")) return;
+  $("#indices").innerHTML = (list || []).map(i => {
+    const before = lastIdx[i.symbol];
+    lastIdx[i.symbol] = i.price;
+    const dir = before == null || before === i.price ? "" : i.price > before ? "flash-up" : "flash-down";
+    return `<div class="card idx"><div class="nm">${esc(i.name)}${i.live ? '<span class="liveDot" title="Live"></span>' : ""}</div>
+      <div class="px"><span class="${dir}">${i.price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span></div>
+      ${pctSpan(i.change)}${sparkSVG(i.spark, cssVar(i.change >= 0 ? "--up" : "--down"))}</div>`;
+  }).join("") || '<div class="card muted">Index data unavailable right now.</div>';
+}
+async function refreshIndices() {
+  if (document.hidden || !$("#indices")) return;
+  try { drawIndices(await api("/api/market")); } catch {}
 }
 
 async function renderScreener() {
@@ -402,14 +429,14 @@ async function renderStock(sym) {
       <div class="stockHead">
         <div><h1>${esc(q.name)} ${starBtn(q.symbol)}</h1>
           <div class="muted">${esc(q.symbol)} · ${esc(q.sector)}${q.industry ? " · " + esc(q.industry) : ""}</div></div>
-        <div style="text-align:right"><div class="bigPrice">${money(q.price)}</div>
-          ${q["1d"] != null ? `<div class="${cls(q["1d"])}">${q.netchange != null ? (q.netchange >= 0 ? "+" : "") + q.netchange.toFixed(2) + " " : ""}(${pctTxt(q["1d"])}) today</div>` : ""}</div>
+        <div style="text-align:right"><div class="bigPrice" data-lp="${esc(q.symbol)}" data-focus="${esc(q.symbol)}">${money(q.price)}</div>
+          <div class="${cls(q["1d"])}" data-lt="${esc(q.symbol)}">${todayTxt(q.netchange, q["1d"])}</div></div>
       </div>
       <div style="margin-top:14px">${seg(RANGES, "1y", "range")}</div>
       <div class="chartBox"><canvas id="chart"></canvas><div id="chartMsg" class="skeleton"></div></div>
     </div>
     <div class="card"><div class="cardHead"><h2>Performance</h2></div>
-      <div class="perf">${PERIODS.map(([k, l]) => `<div><span class="muted small">${l}</span><b class="${cls(q[k])}">${pctTxt(q[k])}</b></div>`).join("")}</div></div>
+      <div class="perf">${PERIODS.map(([k, l]) => `<div><span class="muted small">${l}</span><b class="${cls(q[k])}" ${k === "1d" ? `data-lc="${esc(q.symbol)}" data-base=""` : ""}>${pctTxt(q[k])}</b></div>`).join("")}</div></div>
     <div class="grid g2">
       <div class="card"><div class="cardHead"><h2>Key stats</h2></div><div class="stats" style="grid-template-columns:1fr">
         <div><span class="muted">Market cap</span><span>${q.cap ? "$" + big(q.cap) : "–"}</span></div>
@@ -464,6 +491,7 @@ async function drawChart(sym, range) {
       },
     },
   });
+  chart.liveSym = sym; chart.liveRange = range;   // lets live prices extend the 1D chart
 }
 
 // ---------- router ----------
@@ -478,8 +506,52 @@ function route() {
   if (name === "screener") return renderScreener();
   if (name === "favorites") return renderFavorites();
   renderMarket();
-  refreshTimer = setInterval(fillMarket, 60000);
+  let ticks = 0;
+  refreshTimer = setInterval(() => { if (++ticks % 20 === 0) fillMarket(); else refreshIndices(); }, 3000);
 }
+
+// ---------- live prices ----------
+let lastPrices = {}, lastChartPush = 0;
+function flash(el, dir) { el.classList.remove("flash-up", "flash-down"); void el.offsetWidth; el.classList.add(dir); }
+function liveSymbols() {
+  const syms = [];
+  const add = s => { if (s && !syms.includes(s)) syms.push(s); };
+  document.querySelectorAll("[data-focus]").forEach(el => add(el.dataset.focus));   // the stock you're viewing first
+  document.querySelectorAll("[data-lp]").forEach(el => add(el.dataset.lp));         // then everything on screen
+  favs.forEach(add);                                                                 // then favorites
+  return syms.slice(0, 150);
+}
+function setBadge(d) {
+  const b = $("#liveBadge");
+  const streaming = Object.values(d.quotes || {}).some(q => q.live);
+  if (d.connected) { b.textContent = streaming ? "● LIVE" : "● Live (market quiet)"; b.className = "badge" + (streaming ? " on" : ""); b.title = "Live prices from Finnhub"; }
+  else if (d.enabled) { b.textContent = "● Connecting…"; b.className = "badge"; b.title = d.error || ""; }
+  else { b.textContent = "● Live off"; b.className = "badge"; b.title = d.error || "Add a Finnhub key for live prices"; }
+}
+async function pollLive() {
+  if (document.hidden) return;
+  const syms = liveSymbols();
+  let d;
+  try { d = await api("/api/live?symbols=" + encodeURIComponent(syms.join(","))); } catch { return; }
+  setBadge(d);
+  for (const [s, q] of Object.entries(d.quotes)) {
+    if (q.p == null) continue;
+    const before = lastPrices[s];
+    lastPrices[s] = q.p;
+    const dir = before == null || before === q.p ? "" : q.p > before ? "flash-up" : "flash-down";
+    const sel = CSS.escape(s);
+    document.querySelectorAll(`[data-lp="${sel}"]`).forEach(el => { const t = money(q.p); if (el.textContent !== t) { el.textContent = t; if (dir) flash(el, dir); } });
+    document.querySelectorAll(`[data-lc="${sel}"]`).forEach(el => { el.textContent = pctTxt(q.c); el.className = (el.dataset.base ? el.dataset.base + " " : "") + cls(q.c); });
+    document.querySelectorAll(`[data-lt="${sel}"]`).forEach(el => { el.textContent = todayTxt(q.n, q.c); el.className = cls(q.c); });
+    if (chart && chart.liveSym === s && chart.liveRange === "1d" && q.live && dir && Date.now() - lastChartPush > 2000) {
+      lastChartPush = Date.now();
+      chart.data.labels.push(new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}));
+      chart.data.datasets[0].data.push(q.p);
+      chart.update("none");
+    }
+  }
+}
+setInterval(pollLive, 1000);
 window.addEventListener("hashchange", route);
 
 (async function start() {
